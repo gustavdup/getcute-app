@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS messages (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-    timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    message_timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     type TEXT NOT NULL CHECK (type IN ('note', 'reminder', 'birthday', 'slash_command', 'brain_dump')),
     content TEXT NOT NULL,
     tags TEXT[] DEFAULT '{}',
@@ -72,9 +72,32 @@ CREATE TABLE IF NOT EXISTS sessions (
     metadata JSONB DEFAULT '{}'
 );
 
+-- Files/Storage table for media management
+CREATE TABLE IF NOT EXISTS files (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    message_id UUID REFERENCES messages(id) ON DELETE CASCADE,
+    filename TEXT NOT NULL, -- Generated filename in storage
+    original_filename TEXT NOT NULL, -- Original filename from user
+    file_type TEXT NOT NULL CHECK (file_type IN ('image', 'audio', 'document', 'video')),
+    mime_type TEXT NOT NULL,
+    file_size_bytes BIGINT NOT NULL,
+    storage_path TEXT NOT NULL, -- Full path: user_folders/{user_id}/{filename}
+    storage_bucket TEXT DEFAULT 'user-media',
+    upload_status TEXT DEFAULT 'uploading' CHECK (upload_status IN ('uploading', 'completed', 'failed', 'deleted')),
+    transcription_status TEXT DEFAULT 'pending' CHECK (transcription_status IN ('pending', 'processing', 'completed', 'failed', 'not_applicable')),
+    transcription_text TEXT,
+    duration_seconds INTEGER, -- For audio/video files
+    dimensions JSONB, -- For images/videos: {"width": 1920, "height": 1080}
+    metadata JSONB DEFAULT '{}',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    deleted_at TIMESTAMP WITH TIME ZONE,
+    CONSTRAINT files_size_check CHECK (file_size_bytes > 0 AND file_size_bytes <= 52428800) -- 50MB limit
+);
+
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_messages_user_id ON messages(user_id);
-CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
+CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(message_timestamp);
 CREATE INDEX IF NOT EXISTS idx_messages_type ON messages(type);
 CREATE INDEX IF NOT EXISTS idx_messages_tags ON messages USING GIN(tags);
 CREATE INDEX IF NOT EXISTS idx_messages_vector ON messages USING ivfflat (vector_embedding vector_cosine_ops) WITH (lists = 100);
@@ -89,12 +112,19 @@ CREATE INDEX IF NOT EXISTS idx_birthdays_date ON birthdays(birthdate);
 CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
 
+CREATE INDEX IF NOT EXISTS idx_files_user_id ON files(user_id);
+CREATE INDEX IF NOT EXISTS idx_files_message_id ON files(message_id);
+CREATE INDEX IF NOT EXISTS idx_files_type ON files(file_type);
+CREATE INDEX IF NOT EXISTS idx_files_upload_status ON files(upload_status);
+CREATE INDEX IF NOT EXISTS idx_files_transcription_status ON files(transcription_status);
+
 -- Row Level Security (RLS) policies
 ALTER TABLE users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE messages ENABLE ROW LEVEL SECURITY;
 ALTER TABLE reminders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE birthdays ENABLE ROW LEVEL SECURITY;
 ALTER TABLE sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE files ENABLE ROW LEVEL SECURITY;
 
 -- Users can only access their own data
 CREATE POLICY "Users can view own data" ON users FOR SELECT USING (auth.uid()::text = id::text);
@@ -116,6 +146,11 @@ CREATE POLICY "Users can view own sessions" ON sessions FOR SELECT USING (auth.u
 CREATE POLICY "Users can insert own sessions" ON sessions FOR INSERT WITH CHECK (auth.uid()::text = user_id::text);
 CREATE POLICY "Users can update own sessions" ON sessions FOR UPDATE USING (auth.uid()::text = user_id::text);
 
+CREATE POLICY "Users can view own files" ON files FOR SELECT USING (auth.uid()::text = user_id::text);
+CREATE POLICY "Users can insert own files" ON files FOR INSERT WITH CHECK (auth.uid()::text = user_id::text);
+CREATE POLICY "Users can update own files" ON files FOR UPDATE USING (auth.uid()::text = user_id::text);
+CREATE POLICY "Users can delete own files" ON files FOR DELETE USING (auth.uid()::text = user_id::text);
+
 -- Helper functions
 CREATE OR REPLACE FUNCTION search_messages_by_vector(
     user_id UUID,
@@ -127,7 +162,7 @@ RETURNS TABLE(
     id UUID,
     content TEXT,
     tags TEXT[],
-    timestamp TIMESTAMP WITH TIME ZONE,
+    message_timestamp TIMESTAMP WITH TIME ZONE,
     similarity FLOAT
 )
 LANGUAGE plpgsql
@@ -138,7 +173,7 @@ BEGIN
         m.id,
         m.content,
         m.tags,
-        m.timestamp,
+        m.message_timestamp,
         1 - (m.vector_embedding <=> query_embedding) AS similarity
     FROM messages m
     WHERE m.user_id = search_messages_by_vector.user_id
@@ -204,6 +239,100 @@ BEGIN
 END;
 $$;
 
+-- File management functions
+CREATE OR REPLACE FUNCTION generate_user_file_path(
+    user_id UUID,
+    file_extension TEXT
+)
+RETURNS TEXT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    filename TEXT;
+    timestamp_str TEXT;
+BEGIN
+    -- Generate timestamp-based filename to avoid conflicts
+    timestamp_str := EXTRACT(EPOCH FROM NOW())::BIGINT::TEXT;
+    filename := timestamp_str || '_' || SUBSTRING(gen_random_uuid()::TEXT FROM 1 FOR 8) || file_extension;
+    
+    -- Return path: user_folders/{user_id}/{filename}
+    RETURN 'user_folders/' || user_id::TEXT || '/' || filename;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION get_user_storage_stats(user_id UUID)
+RETURNS TABLE(
+    total_files BIGINT,
+    total_size_bytes BIGINT,
+    total_size_mb NUMERIC,
+    images_count BIGINT,
+    audio_count BIGINT,
+    documents_count BIGINT,
+    videos_count BIGINT
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RETURN QUERY
+    SELECT
+        COUNT(*) AS total_files,
+        COALESCE(SUM(f.file_size_bytes), 0) AS total_size_bytes,
+        ROUND(COALESCE(SUM(f.file_size_bytes), 0) / 1048576.0, 2) AS total_size_mb,
+        COUNT(*) FILTER (WHERE f.file_type = 'image') AS images_count,
+        COUNT(*) FILTER (WHERE f.file_type = 'audio') AS audio_count,
+        COUNT(*) FILTER (WHERE f.file_type = 'document') AS documents_count,
+        COUNT(*) FILTER (WHERE f.file_type = 'video') AS videos_count
+    FROM files f
+    WHERE f.user_id = get_user_storage_stats.user_id
+    AND f.upload_status = 'completed'
+    AND f.deleted_at IS NULL;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION cleanup_failed_uploads()
+RETURNS INTEGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    cleaned_count INTEGER;
+BEGIN
+    -- Mark files as deleted if they've been in 'uploading' or 'failed' status for more than 1 hour
+    UPDATE files 
+    SET deleted_at = NOW()
+    WHERE upload_status IN ('uploading', 'failed')
+    AND created_at < NOW() - INTERVAL '1 hour'
+    AND deleted_at IS NULL;
+    
+    GET DIAGNOSTICS cleaned_count = ROW_COUNT;
+    RETURN cleaned_count;
+END;
+$$;
+
+-- Trigger to automatically create user folder path on first file upload
+CREATE OR REPLACE FUNCTION ensure_user_folder()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    -- The actual folder creation will be handled by the application
+    -- This trigger just ensures the path follows the correct pattern
+    IF NEW.storage_path IS NULL OR NEW.storage_path = '' THEN
+        NEW.storage_path := generate_user_file_path(NEW.user_id, '.tmp');
+    END IF;
+    
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trigger_ensure_user_folder
+    BEFORE INSERT ON files
+    FOR EACH ROW
+    EXECUTE FUNCTION ensure_user_folder();
+
+-- Update messages table to have a proper relationship with files
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS file_id UUID REFERENCES files(id);
+CREATE INDEX IF NOT EXISTS idx_messages_file_id ON messages(file_id);
+
 -- Sample data (optional - for testing)
 /*
 INSERT INTO users (phone_number, platform) VALUES ('+1234567890', 'whatsapp');
@@ -219,6 +348,23 @@ FROM users WHERE phone_number = '+1234567890';
 INSERT INTO birthdays (user_id, person_name, birthdate, tags)
 SELECT id, 'John Doe', '1990-05-15', '{"family"}'
 FROM users WHERE phone_number = '+1234567890';
+
+-- Sample file upload (image)
+INSERT INTO files (user_id, message_id, filename, original_filename, file_type, mime_type, file_size_bytes, storage_path, upload_status)
+SELECT 
+    u.id, 
+    m.id,
+    '1640995200_a1b2c3d4.jpg',
+    'photo.jpg',
+    'image',
+    'image/jpeg',
+    2048576,
+    'user_folders/' || u.id::TEXT || '/1640995200_a1b2c3d4.jpg',
+    'completed'
+FROM users u, messages m 
+WHERE u.phone_number = '+1234567890' 
+AND m.user_id = u.id 
+LIMIT 1;
 */
 
 -- Grant necessary permissions (adjust based on your needs)

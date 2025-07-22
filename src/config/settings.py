@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     # Application Configuration
     debug: bool = Field(default=False, description="Enable debug mode")
     log_level: str = Field(default="INFO", description="Logging level")
+    environment: str = Field(default="production", description="Environment (local/production)")
     secret_key: str = Field(default="dev-secret-key-change-in-production", description="Secret key for JWT tokens")
     api_host: str = Field(default="localhost", description="API host")
     api_port: int = Field(default=8000, description="API port")
@@ -30,6 +31,10 @@ class Settings(BaseSettings):
     whatsapp_access_token: str = Field(default="", description="WhatsApp access token")
     whatsapp_phone_number_id: str = Field(default="", description="WhatsApp phone number ID")
     whatsapp_webhook_verify_token: str = Field(default="dev-verify-token", description="WhatsApp webhook verify token")
+    
+    # Facebook App Credentials (for token renewal)
+    facebook_app_id: str = Field(default="", description="Facebook App ID")
+    facebook_app_secret: str = Field(default="", description="Facebook App Secret")
     
     # Admin Panel
     admin_username: str = Field(default="admin", description="Admin panel username")

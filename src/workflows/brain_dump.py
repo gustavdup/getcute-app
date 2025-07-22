@@ -4,10 +4,10 @@ Brain dump workflow for managing focused note-taking sessions.
 import logging
 from datetime import datetime, timedelta
 from typing import List, Optional
-from ..models.message_types import ProcessedMessage, ClassificationResult
-from ..models.database import User, Session, Message, MessageType, SourceType, SessionStatus
-from ..services.supabase_service import SupabaseService
-from ..services.whatsapp_service import WhatsAppService
+from models.message_types import ProcessedMessage, ClassificationResult
+from models.database import User, Session, Message, MessageType, SourceType, SessionStatus
+from services.supabase_service import SupabaseService
+from services.whatsapp_service import WhatsAppService
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +87,7 @@ class BrainDumpWorkflow:
             # Save the message with session tags
             note = Message(
                 user_id=user.id,
-                timestamp=message.timestamp,
+                message_timestamp=message.timestamp,
                 type=MessageType.BRAIN_DUMP,
                 content=message.content,
                 tags=session.tags or [],

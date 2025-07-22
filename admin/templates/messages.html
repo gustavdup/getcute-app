@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Recent Messages - WhatsApp Bot Admin</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        .header {
+            background: linear-gradient(135deg, #25D366 0%, #128C7E 100%);
+            color: white;
+            padding: 20px 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 1.8em;
+        }
+        .breadcrumb {
+            background: #f8f9fa;
+            padding: 15px 30px;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        .breadcrumb a {
+            color: #128C7E;
+            text-decoration: none;
+            margin-right: 5px;
+        }
+        .breadcrumb a:hover {
+            text-decoration: underline;
+        }
+        .controls {
+            padding: 20px 30px;
+            background: #f8f9fa;
+            border-bottom: 1px solid #e0e0e0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+        .search-box {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        .search-box input {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            width: 250px;
+        }
+        .filter-group {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.3s ease;
+        }
+        .btn-primary {
+            background: #25D366;
+            color: white;
+        }
+        .btn-primary:hover {
+            background: #128C7E;
+        }
+        .btn-secondary {
+            background: #6c757d;
+            color: white;
+        }
+        .btn-secondary:hover {
+            background: #545b62;
+        }
+        .stats-bar {
+            padding: 15px 30px;
+            background: #e8f5e8;
+            border-bottom: 1px solid #c8e6c9;
+            display: flex;
+            gap: 30px;
+            flex-wrap: wrap;
+        }
+        .stat-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .stat-number {
+            font-weight: bold;
+            color: #128C7E;
+        }
+        .messages-list {
+            padding: 0;
+        }
+        .message-item {
+            padding: 20px 30px;
+            border-bottom: 1px solid #e0e0e0;
+            transition: background 0.2s ease;
+        }
+        .message-item:hover {
+            background: #f8f9fa;
+        }
+        .message-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 10px;
+        }
+        .user-info {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .user-avatar {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #25D366, #128C7E);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 12px;
+        }
+        .user-details h4 {
+            margin: 0;
+            font-size: 14px;
+            color: #333;
+        }
+        .user-details p {
+            margin: 2px 0 0 0;
+            font-size: 12px;
+            color: #666;
+        }
+        .message-meta {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            font-size: 12px;
+            color: #666;
+        }
+        .message-content {
+            margin: 10px 0;
+            padding: 12px;
+            background: #f8f9fa;
+            border-left: 4px solid #25D366;
+            border-radius: 4px;
+        }
+        .message-content p {
+            margin: 0;
+            line-height: 1.4;
+            color: #333;
+        }
+        .message-tags {
+            margin-top: 8px;
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+        .tag {
+            background: #e3f2fd;
+            color: #1976d2;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 500;
+        }
+        .message-type {
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 500;
+            text-transform: uppercase;
+        }
+        .type-note {
+            background: #f3e5f5;
+            color: #7b1fa2;
+        }
+        .type-reminder {
+            background: #fff3e0;
+            color: #f57c00;
+        }
+        .type-birthday {
+            background: #fce4ec;
+            color: #c2185b;
+        }
+        .type-brain_dump {
+            background: #e8f5e8;
+            color: #388e3c;
+        }
+        .confidence-bar {
+            width: 60px;
+            height: 4px;
+            background: #e0e0e0;
+            border-radius: 2px;
+            overflow: hidden;
+            margin-top: 4px;
+        }
+        .confidence-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #f44336, #ff9800, #4caf50);
+            transition: width 0.3s ease;
+        }
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #666;
+        }
+        .empty-state h3 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+        .pagination {
+            padding: 20px 30px;
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+        }
+        .page-btn {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            background: white;
+            cursor: pointer;
+            border-radius: 4px;
+        }
+        .page-btn.active {
+            background: #25D366;
+            color: white;
+            border-color: #25D366;
+        }
+        .page-btn:hover:not(.active) {
+            background: #f5f5f5;
+        }
+        .filter-select {
+            padding: 6px 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>💬 Recent Messages</h1>
+            <button class="btn btn-secondary" onclick="window.location.href='/admin'">← Back to Dashboard</button>
+        </div>
+
+        <div class="breadcrumb">
+            <a href="/admin">Dashboard</a> / <span>Recent Messages</span>
+        </div>
+
+        <div class="controls">
+            <div class="search-box">
+                <input type="text" id="searchInput" placeholder="Search messages..." onkeyup="filterMessages()">
+                <button class="btn btn-primary" onclick="refreshMessages()">🔄 Refresh</button>
+            </div>
+            <div class="filter-group">
+                <select id="typeFilter" onchange="filterMessages()" class="filter-select">
+                    <option value="">All Types</option>
+                    <option value="note">Notes</option>
+                    <option value="reminder">Reminders</option>
+                    <option value="birthday">Birthdays</option>
+                    <option value="brain_dump">Brain Dumps</option>
+                </select>
+                <select id="sortBy" onchange="sortMessages()" class="filter-select">
+                    <option value="newest">Newest First</option>
+                    <option value="oldest">Oldest First</option>
+                    <option value="confidence">By Confidence</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="stats-bar">
+            <div class="stat-item">
+                <span>📊 Total Messages:</span>
+                <span class="stat-number" id="totalMessages">-</span>
+            </div>
+            <div class="stat-item">
+                <span>📝 Notes:</span>
+                <span class="stat-number" id="noteCount">-</span>
+            </div>
+            <div class="stat-item">
+                <span>⏰ Reminders:</span>
+                <span class="stat-number" id="reminderCount">-</span>
+            </div>
+            <div class="stat-item">
+                <span>🎂 Birthdays:</span>
+                <span class="stat-number" id="birthdayCount">-</span>
+            </div>
+        </div>
+
+        <div id="loadingState" class="loading">
+            <p>⏳ Loading messages...</p>
+        </div>
+
+        <div id="messagesContent" style="display: none;">
+            <div id="messagesList" class="messages-list">
+                <!-- Messages will be populated here -->
+            </div>
+        </div>
+
+        <div id="emptyState" class="empty-state" style="display: none;">
+            <h3>No Messages Found</h3>
+            <p>No messages match your current filters.</p>
+        </div>
+
+        <div class="pagination" id="pagination" style="display: none;">
+            <!-- Pagination will be populated here -->
+        </div>
+    </div>
+
+    <script>
+        let allMessages = [];
+        let filteredMessages = [];
+        let currentPage = 1;
+        const messagesPerPage = 20;
+
+        // Load messages on page load
+        window.onload = function() {
+            loadMessages();
+        };
+
+        async function loadMessages() {
+            try {
+                document.getElementById('loadingState').style.display = 'block';
+                document.getElementById('messagesContent').style.display = 'none';
+                document.getElementById('emptyState').style.display = 'none';
+
+                const response = await fetch('/admin/api/messages');
+                const data = await response.json();
+
+                if (data.messages && data.messages.length > 0) {
+                    allMessages = data.messages;
+                    filteredMessages = [...allMessages];
+                    
+                    updateStats();
+                    displayMessages();
+                    document.getElementById('messagesContent').style.display = 'block';
+                } else {
+                    document.getElementById('emptyState').style.display = 'block';
+                }
+
+                document.getElementById('loadingState').style.display = 'none';
+            } catch (error) {
+                console.error('Error loading messages:', error);
+                document.getElementById('loadingState').innerHTML = '<p>❌ Error loading messages. Please try again.</p>';
+            }
+        }
+
+        function updateStats() {
+            const stats = {
+                total: allMessages.length,
+                note: 0,
+                reminder: 0,
+                birthday: 0,
+                brain_dump: 0
+            };
+
+            allMessages.forEach(msg => {
+                if (msg.message_type) {
+                    stats[msg.message_type] = (stats[msg.message_type] || 0) + 1;
+                }
+            });
+
+            document.getElementById('totalMessages').textContent = stats.total;
+            document.getElementById('noteCount').textContent = stats.note;
+            document.getElementById('reminderCount').textContent = stats.reminder;
+            document.getElementById('birthdayCount').textContent = stats.birthday;
+        }
+
+        function displayMessages() {
+            const startIndex = (currentPage - 1) * messagesPerPage;
+            const endIndex = startIndex + messagesPerPage;
+            const messagesToShow = filteredMessages.slice(startIndex, endIndex);
+
+            const container = document.getElementById('messagesList');
+            container.innerHTML = '';
+
+            messagesToShow.forEach(message => {
+                const messageElement = createMessageElement(message);
+                container.appendChild(messageElement);
+            });
+
+            updatePagination();
+        }
+
+        function createMessageElement(message) {
+            const div = document.createElement('div');
+            div.className = 'message-item';
+            
+            const phoneNumber = message.phone_number || 'Unknown';
+            const initials = phoneNumber.substring(-2).toUpperCase();
+            const timestamp = message.last_message_time ? new Date(message.last_message_time).toLocaleString() : 'Unknown';
+            const messageType = message.message_type || 'note';
+            const confidence = message.classification_confidence || 0;
+            const tags = message.tags || [];
+
+            div.innerHTML = `
+                <div class="message-header">
+                    <div class="user-info">
+                        <div class="user-avatar">${initials}</div>
+                        <div class="user-details">
+                            <h4>${phoneNumber}</h4>
+                            <p>User ID: ${message.user_id || 'Unknown'}</p>
+                        </div>
+                    </div>
+                    <div class="message-meta">
+                        <span class="message-type type-${messageType}">${messageType}</span>
+                        <span>${timestamp}</span>
+                        <div>
+                            <div>Confidence: ${Math.round(confidence * 100)}%</div>
+                            <div class="confidence-bar">
+                                <div class="confidence-fill" style="width: ${confidence * 100}%"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="message-content">
+                    <p>${message.last_message || 'No content'}</p>
+                    ${tags.length > 0 ? `
+                        <div class="message-tags">
+                            ${tags.map(tag => `<span class="tag">#${tag}</span>`).join('')}
+                        </div>
+                    ` : ''}
+                </div>
+            `;
+            
+            return div;
+        }
+
+        function filterMessages() {
+            const searchTerm = document.getElementById('searchInput').value.toLowerCase();
+            const typeFilter = document.getElementById('typeFilter').value;
+            
+            filteredMessages = allMessages.filter(message => {
+                const matchesSearch = !searchTerm || 
+                    (message.last_message || '').toLowerCase().includes(searchTerm) ||
+                    (message.phone_number || '').toLowerCase().includes(searchTerm);
+                
+                const matchesType = !typeFilter || message.message_type === typeFilter;
+                
+                return matchesSearch && matchesType;
+            });
+            
+            currentPage = 1;
+            displayMessages();
+        }
+
+        function sortMessages() {
+            const sortBy = document.getElementById('sortBy').value;
+            
+            filteredMessages.sort((a, b) => {
+                if (sortBy === 'newest') {
+                    return new Date(b.last_message_time || 0) - new Date(a.last_message_time || 0);
+                } else if (sortBy === 'oldest') {
+                    return new Date(a.last_message_time || 0) - new Date(b.last_message_time || 0);
+                } else if (sortBy === 'confidence') {
+                    return (b.classification_confidence || 0) - (a.classification_confidence || 0);
+                }
+                return 0;
+            });
+            
+            displayMessages();
+        }
+
+        function updatePagination() {
+            const totalPages = Math.ceil(filteredMessages.length / messagesPerPage);
+            const pagination = document.getElementById('pagination');
+            
+            if (totalPages <= 1) {
+                pagination.style.display = 'none';
+                return;
+            }
+            
+            pagination.style.display = 'flex';
+            pagination.innerHTML = '';
+            
+            for (let i = 1; i <= totalPages; i++) {
+                const btn = document.createElement('button');
+                btn.className = `page-btn ${i === currentPage ? 'active' : ''}`;
+                btn.textContent = i;
+                btn.onclick = () => {
+                    currentPage = i;
+                    displayMessages();
+                };
+                pagination.appendChild(btn);
+            }
+        }
+
+        async function refreshMessages() {
+            await loadMessages();
+        }
+    </script>
+</body>
+</html>

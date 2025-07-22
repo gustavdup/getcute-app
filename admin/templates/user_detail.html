@@ -1,0 +1,904 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>User Details - {{ user.get('phone', 'Unknown phone') }}</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background-color: #f5f5f5;
+            line-height: 1.6;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        /* Navigation Bar */
+        .nav-bar {
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            padding: 15px 20px;
+            margin-bottom: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 20px;
+        }
+        
+        .nav-left, .nav-right {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        
+        .back-btn {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            padding: 8px 15px;
+            cursor: pointer;
+            font-size: 14px;
+            color: #495057;
+            transition: all 0.2s;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+        }
+        
+        .back-btn:hover {
+            background: #e9ecef;
+            border-color: #adb5bd;
+        }
+        
+        .nav-link {
+            color: #25D366;
+            text-decoration: none;
+            font-weight: 500;
+            font-size: 14px;
+            transition: color 0.2s;
+        }
+        
+        .nav-link:hover {
+            color: #128C7E;
+        }
+        
+        /* Search Container */
+        .nav-center {
+            flex: 1;
+            max-width: 400px;
+        }
+        
+        .search-container {
+            display: flex;
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 25px;
+            overflow: hidden;
+        }
+        
+        .search-input {
+            flex: 1;
+            border: none;
+            outline: none;
+            padding: 10px 15px;
+            background: transparent;
+            font-size: 14px;
+        }
+        
+        .search-btn {
+            background: #25D366;
+            border: none;
+            color: white;
+            padding: 10px 15px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background 0.2s;
+        }
+        
+        .search-btn:hover {
+            background: #128C7E;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #25D366 0%, #128C7E 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .user-info h1 {
+            margin: 0;
+            font-size: 24px;
+        }
+        
+        .user-info p {
+            margin: 5px 0 0 0;
+            opacity: 0.9;
+            font-size: 14px;
+        }
+        
+        .quick-stats {
+            display: flex;
+            gap: 30px;
+        }
+        
+        .stat-item {
+            text-align: center;
+        }
+        
+        .stat-number {
+            display: block;
+            font-size: 24px;
+            font-weight: bold;
+            margin-bottom: 4px;
+        }
+        
+        .stat-label {
+            display: block;
+            font-size: 12px;
+            opacity: 0.9;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        @media (max-width: 768px) {
+            .nav-bar {
+                flex-direction: column;
+                gap: 15px;
+                padding: 15px;
+            }
+            
+            .nav-left, .nav-right {
+                width: 100%;
+                justify-content: center;
+            }
+            
+            .nav-center {
+                width: 100%;
+                max-width: none;
+            }
+            
+            .header {
+                flex-direction: column;
+                text-align: center;
+                gap: 15px;
+            }
+            
+            .quick-stats {
+                gap: 20px;
+            }
+            
+            .stat-item {
+                flex: 1;
+            }
+            
+            .container {
+                padding: 10px;
+            }
+        }
+        
+        .tabs {
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        
+        .tab-buttons {
+            display: flex;
+            background: #f8f9fa;
+            border-bottom: 1px solid #e9ecef;
+        }
+        
+        .tab-btn {
+            flex: 1;
+            padding: 15px 20px;
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            color: #666;
+            transition: all 0.3s ease;
+            border-bottom: 2px solid transparent;
+        }
+        
+        .tab-btn:hover {
+            background: #e9ecef;
+            color: #333;
+        }
+        
+        .tab-btn.active {
+            color: #25D366;
+            background: white;
+            border-bottom-color: #25D366;
+        }
+        
+        .tab-content {
+            display: none;
+            padding: 20px;
+            max-height: 600px;
+            overflow-y: auto;
+        }
+        
+        .tab-content.active {
+            display: block;
+        }
+        
+        /* Timeline/Chat styles */
+        .timeline-controls {
+            margin-bottom: 20px;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        
+        .timeline-controls select {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+        
+        /* Chat bubble styles */
+        .timeline-item {
+            display: flex;
+            margin-bottom: 15px;
+            max-width: 100%;
+        }
+        
+        .timeline-item.user-message {
+            justify-content: flex-start;
+        }
+        
+        .timeline-item.bot-message {
+            justify-content: flex-end;
+        }
+        
+        .message-avatar {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            flex-shrink: 0;
+            margin: 0 10px;
+        }
+        
+        .message-avatar.user {
+            background: #e3f2fd;
+            order: 1;
+        }
+        
+        .message-avatar.bot {
+            background: #e8f5e8;
+            order: 3;
+        }
+        
+        .message-bubble {
+            max-width: 70%;
+            padding: 12px 16px;
+            border-radius: 18px;
+            word-wrap: break-word;
+        }
+        
+        .message-bubble.user {
+            background: #e3f2fd;
+            color: #1976d2;
+            order: 2;
+            border-bottom-left-radius: 4px;
+        }
+        
+        .message-bubble.bot {
+            background: #25D366;
+            color: white;
+            order: 2;
+            border-bottom-right-radius: 4px;
+        }
+        
+        .message-content-text {
+            margin-bottom: 4px;
+        }
+        
+        .message-meta-chat {
+            font-size: 11px;
+            opacity: 0.7;
+        }
+        
+        /* Other styles */
+        .message-item {
+            background: white;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 10px;
+            transition: box-shadow 0.2s;
+        }
+        
+        .message-item:hover {
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        
+        .message-content {
+            margin-bottom: 10px;
+            color: #333;
+        }
+        
+        .message-meta {
+            font-size: 12px;
+            color: #666;
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+        
+        .message-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 5px;
+        }
+        
+        .tag {
+            background: #e3f2fd;
+            color: #1976d2;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 500;
+        }
+        
+        .empty-state {
+            text-align: center;
+            color: #666;
+            padding: 40px 20px;
+        }
+        
+        .empty-state h3 {
+            margin-bottom: 10px;
+            color: #333;
+        }
+        
+        .loading {
+            text-align: center;
+            color: #666;
+            padding: 40px 20px;
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        
+        .stat-card {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        
+        .stat-number {
+            font-size: 24px;
+            font-weight: bold;
+            color: #25D366;
+            margin-bottom: 5px;
+        }
+        
+        /* Media items */
+        .media-item {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        
+        .media-icon {
+            font-size: 24px;
+            width: 40px;
+            text-align: center;
+        }
+        
+        .media-info {
+            flex: 1;
+        }
+        
+        .media-filename {
+            font-weight: 500;
+            color: #333;
+            margin-bottom: 4px;
+        }
+        
+        .media-details {
+            font-size: 12px;
+            color: #666;
+        }
+        
+        /* Reminder and birthday items */
+        .reminder-item {
+            border-left: 4px solid #ff9800;
+        }
+        
+        .birthday-item {
+            border-left: 4px solid #e91e63;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Navigation Bar -->
+        <div class="nav-bar">
+            <div class="nav-left">
+                <button class="back-btn" onclick="goBack()">
+                    <span>←</span> Back to Users
+                </button>
+            </div>
+            <div class="nav-center">
+                <div class="search-container">
+                    <input type="text" id="searchInput" placeholder="Search messages, content, tags..." class="search-input">
+                    <button class="search-btn" onclick="performSearch()">🔍</button>
+                </div>
+            </div>
+            <div class="nav-right">
+                <a href="/admin" class="nav-link">Dashboard</a>
+                <a href="/admin/users" class="nav-link">All Users</a>
+            </div>
+        </div>
+
+        <div class="header">
+            <div class="user-info">
+                <h1>{{ user.get('phone_number', user.get('phone', 'Unknown phone')) }}</h1>
+                <p>User ID: {{ user.get('id', 'Unknown') }}</p>
+                <p>Last active: {{ user.get('last_seen', user.get('last_activity_date', 'Never')) }}</p>
+            </div>
+            <div class="quick-stats">
+                <div class="stat-item">
+                    <span class="stat-number" id="totalMessages">{{ organized_data.notes|length + organized_data.brain_dumps|length }}</span>
+                    <span class="stat-label">Messages</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-number">{{ organized_data.reminders|length }}</span>
+                    <span class="stat-label">Reminders</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-number">{{ organized_data.birthdays|length }}</span>
+                    <span class="stat-label">Birthdays</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-number">{{ organized_data.voice_notes|length + organized_data.images|length }}</span>
+                    <span class="stat-label">Media</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="tabs">
+            <div class="tab-buttons">
+                <button class="tab-btn active" onclick="showTab('timeline')">Timeline</button>
+                <button class="tab-btn" onclick="showTab('notes')">Notes</button>
+                <button class="tab-btn" onclick="showTab('media')">Media</button>
+                <button class="tab-btn" onclick="showTab('reminders')">Reminders</button>
+                <button class="tab-btn" onclick="showTab('birthdays')">Birthdays</button>
+                <button class="tab-btn" onclick="showTab('analytics')">Analytics</button>
+            </div>
+
+            <!-- Timeline Tab -->
+            <div id="timeline" class="tab-content active">
+                <div class="timeline-controls">
+                    <label for="daysFilter">Show last:</label>
+                    <select id="daysFilter" onchange="loadTimeline()">
+                        <option value="7">7 days</option>
+                        <option value="30" selected>30 days</option>
+                        <option value="90">90 days</option>
+                        <option value="365">1 year</option>
+                        <option value="0">All time</option>
+                    </select>
+                </div>
+                <div id="timelineContent" class="loading">Loading conversation...</div>
+            </div>
+
+            <!-- Notes Tab -->
+            <div id="notes" class="tab-content">
+                {% if organized_data.notes %}
+                    {% for note in organized_data.notes %}
+                    <div class="message-item">
+                        <div class="message-meta">
+                            <span>{{ note.get('message_timestamp', note.get('created_at', 'Unknown date')) }}</span>
+                        </div>
+                        <div class="message-content">{{ note.get('content', 'No content') }}</div>
+                        {% if note.get('tags') %}
+                        <div class="message-tags">
+                            {% for tag in note.get('tags', []) %}
+                            <span class="tag">#{{ tag }}</span>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                {% else %}
+                    <div class="empty-state">
+                        <h3>No notes found</h3>
+                        <p>This user hasn't saved any notes yet.</p>
+                    </div>
+                {% endif %}
+            </div>
+
+            <!-- Media Tab -->
+            <div id="media" class="tab-content">
+                {% if organized_data.voice_notes or organized_data.images or organized_data.documents %}
+                    {% for media in organized_data.voice_notes %}
+                    <div class="message-item media-item">
+                        <div class="media-icon">🎤</div>
+                        <div class="media-info">
+                            <div class="media-filename">Voice Note</div>
+                            <div class="media-details">{{ media.get('message_timestamp', media.get('created_at', 'Unknown date')) }}</div>
+                        </div>
+                        {% if media.get('tags') %}
+                        <div class="message-tags">
+                            {% for tag in media.get('tags', []) %}
+                            <span class="tag">#{{ tag }}</span>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                    {% for media in organized_data.images %}
+                    <div class="message-item media-item">
+                        <div class="media-icon">📷</div>
+                        <div class="media-info">
+                            <div class="media-filename">Image</div>
+                            <div class="media-details">{{ media.get('message_timestamp', media.get('created_at', 'Unknown date')) }}</div>
+                        </div>
+                        {% if media.get('tags') %}
+                        <div class="message-tags">
+                            {% for tag in media.get('tags', []) %}
+                            <span class="tag">#{{ tag }}</span>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                {% else %}
+                    <div class="empty-state">
+                        <h3>No media found</h3>
+                        <p>This user hasn't shared any media files yet.</p>
+                    </div>
+                {% endif %}
+            </div>
+
+            <!-- Reminders Tab -->
+            <div id="reminders" class="tab-content">
+                {% if organized_data.reminders %}
+                    {% for reminder in organized_data.reminders %}
+                    <div class="message-item reminder-item">
+                        <div class="message-meta">
+                            <span>⏰ {{ reminder.get('reminder_time', 'No time set') }}</span>
+                            <span>{{ 'Active' if reminder.get('is_active', False) else 'Completed' }}</span>
+                        </div>
+                        <div class="message-content">{{ reminder.get('content', 'No content') }}</div>
+                        {% if reminder.get('tags') %}
+                        <div class="message-tags">
+                            {% for tag in reminder.get('tags', []) %}
+                            <span class="tag">#{{ tag }}</span>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                {% else %}
+                    <div class="empty-state">
+                        <h3>No reminders found</h3>
+                        <p>This user hasn't set any reminders yet.</p>
+                    </div>
+                {% endif %}
+            </div>
+
+            <!-- Birthdays Tab -->
+            <div id="birthdays" class="tab-content">
+                {% if organized_data.birthdays %}
+                    {% for birthday in organized_data.birthdays %}
+                    <div class="message-item birthday-item">
+                        <div class="message-meta">
+                            <span>🎂 {{ birthday.get('person_name', 'Unknown person') }}</span>
+                            <span>{{ birthday.get('birth_date', 'No date set') }}</span>
+                        </div>
+                        {% if birthday.get('notification_settings') %}
+                        <div class="message-content">
+                            Notifications: {{ birthday.get('notification_settings') }}
+                        </div>
+                        {% endif %}
+                        {% if birthday.get('tags') %}
+                        <div class="message-tags">
+                            {% for tag in birthday.get('tags', []) %}
+                            <span class="tag">#{{ tag }}</span>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                {% else %}
+                    <div class="empty-state">
+                        <h3>No birthdays found</h3>
+                        <p>This user hasn't saved any birthdays yet.</p>
+                    </div>
+                {% endif %}
+            </div>
+
+            <!-- Analytics Tab -->
+            <div id="analytics" class="tab-content">
+                <div id="analyticsContent" class="loading">Loading analytics...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentUserId = '{{ user.get("id", "") }}';
+        
+        function showTab(tabName) {
+            // Hide all tabs
+            document.querySelectorAll('.tab-content').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            
+            // Show selected tab
+            document.getElementById(tabName).classList.add('active');
+            event.target.classList.add('active');
+            
+            // Load data if needed
+            if (tabName === 'timeline') {
+                loadTimeline();
+            } else if (tabName === 'analytics') {
+                loadAnalytics();
+            }
+        }
+
+        async function loadTimeline() {
+            const days = document.getElementById('daysFilter').value;
+            const content = document.getElementById('timelineContent');
+            content.innerHTML = '<div class="loading">Loading conversation...</div>';
+            
+            try {
+                // Use the conversation endpoint for proper chat-style display
+                const response = await fetch(`/admin/api/conversation/${currentUserId}?days=${days}`);
+                const data = await response.json();
+                
+                if (data.status === 'success') {
+                    displayConversation(data.conversation || data.messages);
+                } else {
+                    content.innerHTML = `<div class="empty-state"><h3>Error</h3><p>${data.message}</p></div>`;
+                }
+            } catch (error) {
+                content.innerHTML = `<div class="empty-state"><h3>Error</h3><p>Failed to load conversation: ${error.message}</p></div>`;
+            }
+        }
+
+        function displayConversation(messages) {
+            const content = document.getElementById('timelineContent');
+            
+            if (!messages || messages.length === 0) {
+                content.innerHTML = '<div class="empty-state"><h3>No messages found</h3><p>No messages in the selected time period.</p></div>';
+                return;
+            }
+
+            // Sort messages by timestamp (newest first)
+            messages.sort((a, b) => {
+                const dateA = new Date(a.timestamp || a.message_timestamp || a.created_at || 0);
+                const dateB = new Date(b.timestamp || b.message_timestamp || b.created_at || 0);
+                return dateB - dateA; // Descending order (newest first)
+            });
+
+            let html = '';
+            messages.forEach(message => {
+                const date = new Date(message.timestamp || message.message_timestamp || message.created_at).toLocaleString();
+                let icon = '👤';
+                let bubbleClass = 'user';
+                let timelineClass = 'user-message';
+                let avatarClass = 'user';
+                
+                // Check if this is a bot response
+                const isBotResponse = (
+                    message.is_bot_response ||
+                    (message.metadata && message.metadata.sender === 'bot') ||
+                    (message.tags && message.tags.includes('bot-response')) ||
+                    (message.content && message.content.startsWith('🤖'))
+                );
+                
+                if (isBotResponse) {
+                    icon = '🤖';
+                    bubbleClass = 'bot';
+                    timelineClass = 'bot-message';
+                    avatarClass = 'bot';
+                } else {
+                    // Different icons for different message types
+                    if (message.type === 'reminder') {
+                        icon = '⏰';
+                    } else if (message.type === 'birthday') {
+                        icon = '🎂';
+                    } else if (message.source_type === 'audio') {
+                        icon = '🎤';
+                    } else if (message.source_type === 'image') {
+                        icon = '📷';
+                    }
+                }
+
+                const messageContent = message.content || 'No content';
+                const cleanContent = isBotResponse && messageContent.startsWith('🤖') ? 
+                    messageContent.substring(2).trim() : messageContent;
+
+                html += `
+                    <div class="timeline-item ${timelineClass}">
+                        <div class="message-avatar ${avatarClass}">${icon}</div>
+                        <div class="message-bubble ${bubbleClass}">
+                            <div class="message-content-text">${cleanContent}</div>
+                            <div class="message-meta-chat">${date}</div>
+                        </div>
+                    </div>
+                `;
+            });
+            
+            content.innerHTML = html;
+        }
+
+        async function loadAnalytics() {
+            const content = document.getElementById('analyticsContent');
+            content.innerHTML = '<div class="loading">Loading analytics...</div>';
+            
+            try {
+                const response = await fetch(`/admin/user/api/users/${currentUserId}/stats`);
+                const data = await response.json();
+                
+                if (data.status === 'success') {
+                    displayAnalytics(data.stats);
+                } else {
+                    content.innerHTML = `<div class="empty-state"><h3>Error</h3><p>${data.message}</p></div>`;
+                }
+            } catch (error) {
+                content.innerHTML = `<div class="empty-state"><h3>Error</h3><p>Failed to load analytics: ${error.message}</p></div>`;
+            }
+        }
+
+        function displayAnalytics(stats) {
+            const content = document.getElementById('analyticsContent');
+            
+            let html = `
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-number">${stats.total_messages}</div>
+                        <div>Total Messages</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-number">${stats.total_files}</div>
+                        <div>Media Files</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-number">${stats.total_reminders}</div>
+                        <div>Reminders</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-number">${stats.total_birthdays}</div>
+                        <div>Birthdays</div>
+                    </div>
+                </div>
+                
+                <h3>Message Types</h3>
+                <div class="message-item">
+            `;
+            
+            for (const [type, count] of Object.entries(stats.messages_by_type)) {
+                html += `<div>${type}: ${count}</div>`;
+            }
+            
+            html += `</div><h3>Top Tags</h3><div class="message-tags">`;
+            
+            for (const [tag, count] of Object.entries(stats.most_used_tags)) {
+                html += `<span class="tag">#${tag} (${count})</span>`;
+            }
+            
+            html += `</div>`;
+            
+            content.innerHTML = html;
+        }
+
+        // Load timeline on page load
+        window.onload = function() {
+            loadTimeline();
+        };
+        
+        // Navigation functions
+        function goBack() {
+            window.location.href = '/admin/users';
+        }
+        
+        // Search functionality
+        function performSearch() {
+            const searchTerm = document.getElementById('searchInput').value.trim();
+            if (searchTerm) {
+                searchInContent(searchTerm);
+            } else {
+                // Reset to show all content
+                loadTimeline();
+            }
+        }
+        
+        // Search in current content
+        function searchInContent(searchTerm) {
+            const content = document.getElementById('timelineContent');
+            const searchLower = searchTerm.toLowerCase();
+            
+            // Get current messages from the timeline
+            const timelineItems = content.querySelectorAll('.timeline-item');
+            let foundItems = [];
+            
+            timelineItems.forEach(item => {
+                const messageText = item.querySelector('.message-content-text');
+                if (messageText && messageText.textContent.toLowerCase().includes(searchLower)) {
+                    foundItems.push(item.cloneNode(true));
+                }
+            });
+            
+            if (foundItems.length > 0) {
+                content.innerHTML = `
+                    <div style="background: #e3f2fd; padding: 10px; border-radius: 5px; margin-bottom: 15px;">
+                        <strong>Search Results for "${searchTerm}"</strong> - ${foundItems.length} matches found
+                        <button onclick="clearSearch()" style="float: right; background: none; border: none; color: #666; cursor: pointer;">✕ Clear</button>
+                    </div>
+                `;
+                foundItems.forEach(item => {
+                    // Highlight search term
+                    const messageText = item.querySelector('.message-content-text');
+                    if (messageText) {
+                        const highlighted = messageText.innerHTML.replace(
+                            new RegExp(`(${searchTerm})`, 'gi'),
+                            '<mark style="background: yellow; padding: 2px;">$1</mark>'
+                        );
+                        messageText.innerHTML = highlighted;
+                    }
+                    content.appendChild(item);
+                });
+            } else {
+                content.innerHTML = `
+                    <div class="empty-state">
+                        <h3>No matches found</h3>
+                        <p>No messages contain "${searchTerm}"</p>
+                        <button onclick="clearSearch()" class="tab-btn" style="margin-top: 10px;">Show All Messages</button>
+                    </div>
+                `;
+            }
+        }
+        
+        function clearSearch() {
+            document.getElementById('searchInput').value = '';
+            loadTimeline();
+        }
+        
+        // Enter key search
+        document.addEventListener('DOMContentLoaded', function() {
+            document.getElementById('searchInput').addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    performSearch();
+                }
+            });
+        });
+    </script>
+</body>
+</html>

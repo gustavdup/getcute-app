@@ -5,8 +5,8 @@ import logging
 from datetime import datetime, timedelta
 from typing import Optional
 import jwt
-from ..config.settings import settings
-from ..models.database import User
+from config.settings import settings
+from models.database import User
 
 logger = logging.getLogger(__name__)
 

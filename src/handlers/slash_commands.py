@@ -3,11 +3,11 @@ Slash command handler for processing bot commands.
 """
 import logging
 from typing import Dict, Any
-from ..models.message_types import ProcessedMessage, ClassificationResult
-from ..models.database import User
-from ..services.whatsapp_service import WhatsAppService
-from ..services.supabase_service import SupabaseService
-from ..services.auth_service import AuthService
+from models.message_types import ProcessedMessage, ClassificationResult
+from models.database import User
+from services.whatsapp_service import WhatsAppService
+from services.supabase_service import SupabaseService
+from services.auth_service import AuthService
 
 logger = logging.getLogger(__name__)
 

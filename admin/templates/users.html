@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>User Management - WhatsApp Bot Admin</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        .header {
+            background: linear-gradient(135deg, #25D366 0%, #128C7E 100%);
+            color: white;
+            padding: 20px 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 1.8em;
+        }
+        .breadcrumb {
+            background: #f8f9fa;
+            padding: 15px 30px;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        .breadcrumb a {
+            color: #128C7E;
+            text-decoration: none;
+            margin-right: 5px;
+        }
+        .breadcrumb a:hover {
+            text-decoration: underline;
+        }
+        .controls {
+            padding: 20px 30px;
+            background: #f8f9fa;
+            border-bottom: 1px solid #e0e0e0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .search-box {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        .search-box input {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            width: 250px;
+        }
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.3s ease;
+        }
+        .btn-primary {
+            background: #25D366;
+            color: white;
+        }
+        .btn-primary:hover {
+            background: #128C7E;
+        }
+        .btn-secondary {
+            background: #6c757d;
+            color: white;
+        }
+        .btn-secondary:hover {
+            background: #545b62;
+        }
+        .stats-bar {
+            padding: 15px 30px;
+            background: #e8f5e8;
+            border-bottom: 1px solid #c8e6c9;
+            display: flex;
+            gap: 30px;
+        }
+        .stat-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .stat-number {
+            font-weight: bold;
+            color: #128C7E;
+        }
+        .users-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .users-table th {
+            background: #f8f9fa;
+            padding: 12px 15px;
+            text-align: left;
+            border-bottom: 2px solid #e0e0e0;
+            font-weight: 600;
+            color: #333;
+        }
+        .users-table td {
+            padding: 15px;
+            border-bottom: 1px solid #e0e0e0;
+            vertical-align: middle;
+        }
+        .users-table tr:hover {
+            background: #f8f9fa;
+        }
+        .user-info {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .user-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #25D366, #128C7E);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 14px;
+        }
+        .user-details h4 {
+            margin: 0;
+            font-size: 14px;
+            color: #333;
+        }
+        .user-details p {
+            margin: 2px 0 0 0;
+            font-size: 12px;
+            color: #666;
+        }
+        .message-count {
+            background: #e3f2fd;
+            color: #1976d2;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        .status-badge {
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 500;
+            text-transform: uppercase;
+        }
+        .status-active {
+            background: #e8f5e8;
+            color: #2e7d32;
+        }
+        .status-inactive {
+            background: #fff3e0;
+            color: #f57c00;
+        }
+        .actions {
+            display: flex;
+            gap: 8px;
+        }
+        .btn-small {
+            padding: 4px 8px;
+            font-size: 12px;
+            border-radius: 4px;
+        }
+        .btn-view {
+            background: #e3f2fd;
+            color: #1976d2;
+            border: none;
+            cursor: pointer;
+        }
+        .btn-view:hover {
+            background: #bbdefb;
+        }
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #666;
+        }
+        .empty-state h3 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+        .pagination {
+            padding: 20px 30px;
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+        }
+        .page-btn {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            background: white;
+            cursor: pointer;
+            border-radius: 4px;
+        }
+        .page-btn.active {
+            background: #25D366;
+            color: white;
+            border-color: #25D366;
+        }
+        .page-btn:hover:not(.active) {
+            background: #f5f5f5;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>👥 User Management</h1>
+            <button class="btn btn-secondary" onclick="window.location.href='/admin'">← Back to Dashboard</button>
+        </div>
+
+        <div class="breadcrumb">
+            <a href="/admin">Dashboard</a> / <span>User Management</span>
+        </div>
+
+        <div class="controls">
+            <div class="search-box">
+                <input type="text" id="searchInput" placeholder="Search users by phone number..." onkeyup="filterUsers()">
+                <button class="btn btn-primary" onclick="refreshUsers()">🔄 Refresh</button>
+            </div>
+            <div>
+                <select id="sortBy" onchange="sortUsers()" class="btn">
+                    <option value="last_seen">Sort by Last Active</option>
+                    <option value="created_at">Sort by Registration Date</option>
+                    <option value="message_count">Sort by Message Count</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="stats-bar">
+            <div class="stat-item">
+                <span>📊 Total Users:</span>
+                <span class="stat-number" id="totalUsers">-</span>
+            </div>
+            <div class="stat-item">
+                <span>🟢 Active Today:</span>
+                <span class="stat-number" id="activeUsers">-</span>
+            </div>
+            <div class="stat-item">
+                <span>💬 Total Messages:</span>
+                <span class="stat-number" id="totalMessages">-</span>
+            </div>
+        </div>
+
+        <div id="loadingState" class="loading">
+            <p>⏳ Loading users...</p>
+        </div>
+
+        <div id="usersContent" style="display: none;">
+            <table class="users-table">
+                <thead>
+                    <tr>
+                        <th>User</th>
+                        <th>Platform</th>
+                        <th>Messages</th>
+                        <th>Last Active</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="usersTableBody">
+                    <!-- Users will be populated here -->
+                </tbody>
+            </table>
+        </div>
+
+        <div id="emptyState" class="empty-state" style="display: none;">
+            <h3>No Users Found</h3>
+            <p>No users have interacted with the bot yet.</p>
+        </div>
+
+        <div class="pagination" id="pagination" style="display: none;">
+            <!-- Pagination will be populated here -->
+        </div>
+    </div>
+
+    <script>
+        let allUsers = [];
+        let filteredUsers = [];
+        let currentPage = 1;
+        const usersPerPage = 20;
+
+        // Load users on page load
+        window.onload = function() {
+            loadUsers();
+        };
+
+        async function loadUsers() {
+            try {
+                document.getElementById('loadingState').style.display = 'block';
+                document.getElementById('usersContent').style.display = 'none';
+                document.getElementById('emptyState').style.display = 'none';
+
+                const response = await fetch('/admin/api/users');
+                const data = await response.json();
+
+                if (data.users && data.users.length > 0) {
+                    allUsers = data.users;
+                    filteredUsers = [...allUsers];
+                    
+                    // Update stats
+                    document.getElementById('totalUsers').textContent = data.total || allUsers.length;
+                    
+                    displayUsers();
+                    document.getElementById('usersContent').style.display = 'block';
+                } else {
+                    document.getElementById('emptyState').style.display = 'block';
+                }
+
+                document.getElementById('loadingState').style.display = 'none';
+            } catch (error) {
+                console.error('Error loading users:', error);
+                document.getElementById('loadingState').innerHTML = '<p>❌ Error loading users. Please try again.</p>';
+            }
+        }
+
+        function displayUsers() {
+            const startIndex = (currentPage - 1) * usersPerPage;
+            const endIndex = startIndex + usersPerPage;
+            const usersToShow = filteredUsers.slice(startIndex, endIndex);
+
+            const tbody = document.getElementById('usersTableBody');
+            tbody.innerHTML = '';
+
+            usersToShow.forEach(user => {
+                const row = createUserRow(user);
+                tbody.appendChild(row);
+            });
+
+            updatePagination();
+        }
+
+        function createUserRow(user) {
+            const row = document.createElement('tr');
+            
+            const initials = (user.phone_number || 'U').substring(-2).toUpperCase();
+            const lastSeen = user.last_seen ? new Date(user.last_seen).toLocaleDateString() : 'Never';
+            const createdAt = user.created_at ? new Date(user.created_at).toLocaleDateString() : 'Unknown';
+            
+            // Determine status
+            const now = new Date();
+            const lastSeenDate = user.last_seen ? new Date(user.last_seen) : null;
+            const isActive = lastSeenDate && (now - lastSeenDate) < 24 * 60 * 60 * 1000; // Active if seen in last 24h
+            
+            row.innerHTML = `
+                <td>
+                    <div class="user-info">
+                        <div class="user-avatar">${initials}</div>
+                        <div class="user-details">
+                            <h4>${user.phone_number || 'Unknown'}</h4>
+                            <p>Joined ${createdAt}</p>
+                        </div>
+                    </div>
+                </td>
+                <td>${user.platform || 'WhatsApp'}</td>
+                <td><span class="message-count">${user.message_count || 0} messages</span></td>
+                <td>${lastSeen}</td>
+                <td>
+                    <span class="status-badge ${isActive ? 'status-active' : 'status-inactive'}">
+                        ${isActive ? 'Active' : 'Inactive'}
+                    </span>
+                </td>
+                <td>
+                    <div class="actions">
+                        <button class="btn-small btn-view" onclick="viewUser('${user.id}')">👁️ View Details</button>
+                    </div>
+                </td>
+            `;
+            
+            return row;
+        }
+
+        function filterUsers() {
+            const searchTerm = document.getElementById('searchInput').value.toLowerCase();
+            filteredUsers = allUsers.filter(user => 
+                (user.phone_number || '').toLowerCase().includes(searchTerm)
+            );
+            currentPage = 1;
+            displayUsers();
+        }
+
+        function sortUsers() {
+            const sortBy = document.getElementById('sortBy').value;
+            
+            filteredUsers.sort((a, b) => {
+                if (sortBy === 'last_seen') {
+                    return new Date(b.last_seen || 0) - new Date(a.last_seen || 0);
+                } else if (sortBy === 'created_at') {
+                    return new Date(b.created_at || 0) - new Date(a.created_at || 0);
+                } else if (sortBy === 'message_count') {
+                    return (b.message_count || 0) - (a.message_count || 0);
+                }
+                return 0;
+            });
+            
+            displayUsers();
+        }
+
+        function updatePagination() {
+            const totalPages = Math.ceil(filteredUsers.length / usersPerPage);
+            const pagination = document.getElementById('pagination');
+            
+            if (totalPages <= 1) {
+                pagination.style.display = 'none';
+                return;
+            }
+            
+            pagination.style.display = 'flex';
+            pagination.innerHTML = '';
+            
+            for (let i = 1; i <= totalPages; i++) {
+                const btn = document.createElement('button');
+                btn.className = `page-btn ${i === currentPage ? 'active' : ''}`;
+                btn.textContent = i;
+                btn.onclick = () => {
+                    currentPage = i;
+                    displayUsers();
+                };
+                pagination.appendChild(btn);
+            }
+        }
+
+        function viewUser(userId) {
+            window.location.href = `/admin/user/users/${userId}`;
+        }
+
+        async function refreshUsers() {
+            await loadUsers();
+        }
+    </script>
+</body>
+</html>

@@ -8,15 +8,19 @@ from typing import Dict, Any
 from fastapi import APIRouter, Request, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 
-from ..models.message_types import WhatsAppWebhook, ProcessedMessage
-from ..services.whatsapp_service import WhatsAppService
-from .message_router import MessageRouter
+from models.message_types import WhatsAppWebhook, ProcessedMessage
+from services.whatsapp_service import WhatsAppService
+from services.supabase_service import SupabaseService
+from handlers.message_router import MessageRouter
 
 logger = logging.getLogger(__name__)
 
 webhook_router = APIRouter()
-whatsapp_service = WhatsAppService()
-message_router = MessageRouter()
+
+# Initialize services with database connection
+db_service = SupabaseService()
+whatsapp_service = WhatsAppService(db_service)
+message_router = MessageRouter(whatsapp_service)
 
 
 @webhook_router.get("/")

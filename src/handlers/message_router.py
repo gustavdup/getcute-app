@@ -3,14 +3,14 @@ Message router for directing different types of messages to appropriate handlers
 """
 import logging
 from typing import Dict, Any, Optional
-from ..models.message_types import ProcessedMessage, ClassificationResult
-from ..models.database import User, Message, MessageType, SourceType
-from ..services.supabase_service import SupabaseService
-from ..services.whatsapp_service import WhatsAppService
-from ..ai.message_classifier import MessageClassifier
-from ..workflows.brain_dump import BrainDumpWorkflow
-from ..workflows.tagging import TaggingWorkflow
-from .slash_commands import SlashCommandHandler
+from models.message_types import ProcessedMessage, ClassificationResult
+from models.database import User, Message, MessageType, SourceType
+from services.supabase_service import SupabaseService
+from services.whatsapp_service import WhatsAppService
+from ai.message_classifier import MessageClassifier
+from workflows.brain_dump import BrainDumpWorkflow
+from workflows.tagging import TaggingWorkflow
+from handlers.slash_commands import SlashCommandHandler
 
 logger = logging.getLogger(__name__)
 
@@ -18,13 +18,26 @@ logger = logging.getLogger(__name__)
 class MessageRouter:
     """Routes messages to appropriate handlers based on content and context."""
     
-    def __init__(self):
+    def __init__(self, whatsapp_service=None):
         self.db_service = SupabaseService()
-        self.whatsapp_service = WhatsAppService()
+        
+        # Use provided WhatsApp service or create new one with database connection
+        if whatsapp_service:
+            self.whatsapp_service = whatsapp_service
+        else:
+            self.whatsapp_service = WhatsAppService(self.db_service)
+            
         self.classifier = MessageClassifier()
+        
+        # Initialize workflows with the shared WhatsApp service
         self.brain_dump = BrainDumpWorkflow()
         self.tagging = TaggingWorkflow()
         self.slash_handler = SlashCommandHandler()
+        
+        # Replace their WhatsApp services with our database-enabled one
+        self.brain_dump.whatsapp_service = self.whatsapp_service
+        self.tagging.whatsapp_service = self.whatsapp_service
+        self.slash_handler.whatsapp_service = self.whatsapp_service
     
     async def route_message(self, message: ProcessedMessage):
         """Main routing logic for incoming messages."""
@@ -47,6 +60,13 @@ class MessageRouter:
             if active_session and not message.content.startswith('/'):
                 await self.brain_dump.handle_session_message(user, message, active_session)
                 return
+            
+            # Check if this might be a tag response to a previous message
+            if self.tagging.is_tag_response(message.content):
+                tag_handled = await self.tagging.handle_tag_response(user, message.content, message.message_id)
+                if tag_handled:
+                    # Successfully handled as tag response, don't process further
+                    return
             
             # Classify the message
             classification = await self.classifier.classify_message(
@@ -112,7 +132,7 @@ class MessageRouter:
             # Create message record
             note = Message(
                 user_id=user.id,
-                timestamp=message.timestamp,
+                message_timestamp=message.timestamp,
                 type=MessageType.NOTE,
                 content=message.content,
                 tags=classification.suggested_tags or [],

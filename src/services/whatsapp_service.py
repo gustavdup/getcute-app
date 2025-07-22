@@ -5,8 +5,11 @@ import logging
 import json
 from typing import Dict, Any, Optional, List
 import httpx
-from ..config.settings import settings
-from ..models.message_types import (
+from datetime import datetime
+from config.settings import settings
+from services.whatsapp_token_manager import token_manager
+from models.database import Message, MessageType, SourceType
+from models.message_types import (
     WhatsAppTextMessage, WhatsAppInteractiveMessage,
     WhatsAppInteractive, WhatsAppInteractiveBody,
     WhatsAppInteractiveAction, WhatsAppInteractiveButton,
@@ -19,12 +22,55 @@ logger = logging.getLogger(__name__)
 class WhatsAppService:
     """Service for WhatsApp Business API operations."""
     
-    def __init__(self):
+    def __init__(self, db_service=None):
         self.base_url = f"https://graph.facebook.com/v18.0/{settings.whatsapp_phone_number_id}"
-        self.headers = {
-            "Authorization": f"Bearer {settings.whatsapp_access_token}",
-            "Content-Type": "application/json"
-        }
+        self.db_service = db_service
+        
+    def set_db_service(self, db_service):
+        """Set the database service for storing outgoing messages."""
+        self.db_service = db_service
+    
+    async def _store_outgoing_message(self, user_phone: str, message_content: str, message_type: str = "text"):
+        """Store outgoing messages in the database."""
+        if not self.db_service:
+            return
+            
+        try:
+            # Get or create user from phone number
+            user = await self.db_service.get_or_create_user(user_phone)
+            
+            # Create outgoing message record
+            outgoing_message = Message(
+                user_id=user.id,
+                message_timestamp=datetime.now(),
+                type=MessageType.NOTE,  # Bot responses are generally notes/responses
+                content=f"🤖 {message_content}",  # Prefix with robot emoji to indicate bot response
+                source_type=SourceType.TEXT,
+                tags=["bot-response"],  # Tag all bot responses
+                metadata={"direction": "outgoing", "sender": "bot"}  # Store direction in metadata
+            )
+            
+            await self.db_service.save_message(outgoing_message)
+            logger.debug(f"Stored outgoing message to {user_phone}")
+            
+        except Exception as e:
+            logger.warning(f"Failed to store outgoing message: {e}")
+    
+    async def _get_headers(self) -> Dict[str, str]:
+        """Get headers with a valid access token."""
+        try:
+            token = await token_manager.ensure_valid_token()
+            return {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json"
+            }
+        except Exception as e:
+            logger.error(f"Failed to get valid token: {e}")
+            # Fallback to configured token
+            return {
+                "Authorization": f"Bearer {settings.whatsapp_access_token}",
+                "Content-Type": "application/json"
+            }
     
     async def send_text_message(self, to: str, message: str) -> bool:
         """Send a text message."""
@@ -34,15 +80,21 @@ class WhatsAppService:
                 text={"body": message}
             )
             
+            headers = await self._get_headers()
+            
             async with httpx.AsyncClient() as client:
                 response = await client.post(
                     f"{self.base_url}/messages",
-                    headers=self.headers,
+                    headers=headers,
                     json=payload.dict()
                 )
                 
                 if response.status_code == 200:
                     logger.info(f"Message sent successfully to {to}")
+                    
+                    # Store the outgoing message in database
+                    await self._store_outgoing_message(to, message)
+                    
                     return True
                 else:
                     logger.error(f"Failed to send message: {response.text}")
@@ -87,10 +139,12 @@ class WhatsAppService:
                 interactive=interactive
             )
             
+            headers = await self._get_headers()
+            
             async with httpx.AsyncClient() as client:
                 response = await client.post(
                     f"{self.base_url}/messages",
-                    headers=self.headers,
+                    headers=headers,
                     json=payload.dict()
                 )
                 
@@ -108,11 +162,13 @@ class WhatsAppService:
     async def download_media(self, media_id: str) -> Optional[bytes]:
         """Download media file from WhatsApp."""
         try:
+            headers = await self._get_headers()
+            
             # First, get the media URL
             async with httpx.AsyncClient() as client:
                 response = await client.get(
                     f"https://graph.facebook.com/v18.0/{media_id}",
-                    headers={"Authorization": f"Bearer {settings.whatsapp_access_token}"}
+                    headers=headers
                 )
                 
                 if response.status_code != 200:
@@ -129,7 +185,7 @@ class WhatsAppService:
                 # Download the media
                 media_response = await client.get(
                     media_url,
-                    headers={"Authorization": f"Bearer {settings.whatsapp_access_token}"}
+                    headers=headers
                 )
                 
                 if media_response.status_code == 200:

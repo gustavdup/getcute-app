@@ -2,7 +2,7 @@
 Message types and schemas for WhatsApp webhook processing.
 """
 from typing import Optional, List, Dict, Any, Union
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from datetime import datetime
 
 
@@ -15,7 +15,7 @@ class WhatsAppContact(BaseModel):
 
 class WhatsAppMessage(BaseModel):
     """WhatsApp message from webhook."""
-    from_: Optional[str] = None  # Using from_ to avoid Python keyword conflict
+    from_: Optional[str] = Field(None, alias='from')  # Using Field alias for 'from' keyword
     id: str
     timestamp: str
     type: str
@@ -24,9 +24,6 @@ class WhatsAppMessage(BaseModel):
     audio: Optional[Dict[str, str]] = None
     document: Optional[Dict[str, str]] = None
     voice: Optional[Dict[str, str]] = None
-    
-    class Config:
-        fields = {'from_': 'from'}
 
 
 class WhatsAppChange(BaseModel):

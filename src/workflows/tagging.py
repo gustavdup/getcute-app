@@ -4,10 +4,10 @@ Tagging workflow for managing tag suggestions and user responses.
 import logging
 from datetime import datetime, timedelta
 from typing import List, Optional
-from ..models.database import User, Message
-from ..services.supabase_service import SupabaseService
-from ..services.whatsapp_service import WhatsAppService
-from ..ai.message_classifier import MessageClassifier
+from models.database import User, Message
+from services.supabase_service import SupabaseService
+from services.whatsapp_service import WhatsAppService
+from ai.message_classifier import MessageClassifier
 
 logger = logging.getLogger(__name__)
 
@@ -71,40 +71,45 @@ class TaggingWorkflow:
                 # Not a tag response, treat as new message
                 return False
             
-            # Find the original message to tag
-            # This is simplified - in practice you'd need better state management
+            # Find the most recent untagged message from the last few minutes
             recent_messages = await self.db_service.get_user_messages(
                 user_id=user.id,
-                limit=10
+                limit=5  # Look at last 5 messages
             )
             
             target_message = None
+            now = datetime.now()
+            
             for msg in recent_messages:
-                if not msg.tags or len(msg.tags) == 0:
-                    target_message = msg
-                    break
+                # Look for messages from the last 5 minutes that have no tags
+                if msg.message_timestamp and (now - msg.message_timestamp).total_seconds() <= 300:  # 5 minutes
+                    if not msg.tags or len(msg.tags) == 0:
+                        target_message = msg
+                        break
             
             if target_message and target_message.id:
-                # Update message with tags
-                # This would require an update method in the database service
-                logger.info(f"Would update message {target_message.id} with tags: {tags}")
-                
-                # Send confirmation
-                tags_text = " ".join([f"#{tag}" for tag in tags])
-                await self.whatsapp_service.send_text_message(
-                    user.phone_number,
-                    f"✅ Tags added: {tags_text}"
-                )
-                
-                return True
-            else:
-                # Ask for clarification
-                await self.whatsapp_service.send_text_message(
-                    user.phone_number,
-                    "Was that a tag for your last message or a new note? "
-                    "If it's a new note, I'll save it as is."
-                )
-                return False
+                # Update message with tags using the database service
+                try:
+                    await self.db_service.update_message_tags(target_message.id, tags)
+                    
+                    # Send confirmation
+                    tags_text = " ".join([f"#{tag}" for tag in tags])
+                    await self.whatsapp_service.send_text_message(
+                        user.phone_number,
+                        f"✅ Tags added to your note: {tags_text}"
+                    )
+                    
+                    logger.info(f"Added tags {tags} to message {target_message.id}")
+                    return True
+                    
+                except Exception as e:
+                    logger.error(f"Failed to update message tags: {e}")
+                    # Fall through to treat as new message
+            
+            # If no recent untagged message found, this might be a new brain dump session
+            # Let the normal classification handle it
+            logger.info(f"No recent untagged message found for tags: {tags}")
+            return False
                 
         except Exception as e:
             logger.error(f"Error handling tag response: {e}")
@@ -196,12 +201,36 @@ class TaggingWorkflow:
     
     def is_tag_response(self, content: str) -> bool:
         """Check if a message looks like a tag response."""
-        # Simple heuristic: contains hashtags and is relatively short
-        has_hashtags = '#' in content
-        is_short = len(content.strip()) < 100
-        mostly_tags = content.count('#') / len(content.split()) > 0.3 if content.split() else False
+        # Improved heuristics for tag response detection
+        content = content.strip()
         
-        return has_hashtags and (is_short or mostly_tags)
+        # Must contain hashtags
+        if '#' not in content:
+            return False
+        
+        # Split into words
+        words = content.split()
+        if not words:
+            return False
+        
+        # Check if majority of words are hashtags
+        hashtag_words = [word for word in words if word.startswith('#')]
+        hashtag_ratio = len(hashtag_words) / len(words)
+        
+        # Consider it a tag response if:
+        # 1. 70%+ of words are hashtags, OR
+        # 2. It's short (5 words or less) and has hashtags, OR  
+        # 3. All words are hashtags and non-hashtag text is minimal
+        is_mostly_tags = hashtag_ratio >= 0.7
+        is_short_with_tags = len(words) <= 5 and hashtag_ratio >= 0.4
+        is_pure_tags = hashtag_ratio == 1.0
+        
+        # Additional check: doesn't look like a brain dump session start
+        # Brain dump typically has context or longer content
+        has_context_words = any(word.lower() in ['session', 'dump', 'start', 'begin', 'project', 'work', 'notes'] 
+                               for word in words if not word.startswith('#'))
+        
+        return (is_mostly_tags or is_short_with_tags or is_pure_tags) and not has_context_words
     
     async def handle_ambiguous_response(self, user: User, content: str) -> bool:
         """Handle responses that could be tags or new content."""

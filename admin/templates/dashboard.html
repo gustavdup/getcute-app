@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WhatsApp Bot - Admin Dashboard</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        .header {
+            background: linear-gradient(135deg, #25D366 0%, #128C7E 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 2.5em;
+        }
+        .header p {
+            margin: 10px 0 0 0;
+            opacity: 0.9;
+            font-size: 1.1em;
+        }
+        .nav-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            padding: 30px;
+            background: #f8f9fa;
+        }
+        .nav-card {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            border: 2px solid transparent;
+        }
+        .nav-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+            border-color: #25D366;
+        }
+        .nav-card .icon {
+            font-size: 3em;
+            margin-bottom: 15px;
+            display: block;
+        }
+        .nav-card h3 {
+            margin: 0 0 10px 0;
+            color: #128C7E;
+            font-size: 1.3em;
+        }
+        .nav-card p {
+            margin: 0;
+            color: #666;
+            line-height: 1.5;
+        }
+        .stats-overview {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            padding: 20px 30px;
+            background: white;
+        }
+        .stat-card {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+            border-left: 4px solid #25D366;
+        }
+        .stat-number {
+            font-size: 2.2em;
+            font-weight: bold;
+            color: #25D366;
+            margin-bottom: 5px;
+        }
+        .stat-label {
+            color: #666;
+            font-size: 0.95em;
+        }
+        .quick-actions {
+            padding: 30px;
+            background: white;
+            border-top: 1px solid #e0e0e0;
+        }
+        .quick-actions h3 {
+            margin-top: 0;
+            color: #128C7E;
+        }
+        .action-buttons {
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+        .action-btn {
+            background: #25D366;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.3s ease;
+            text-decoration: none;
+            display: inline-block;
+        }
+        .action-btn:hover {
+            background: #128C7E;
+        }
+        .action-btn.secondary {
+            background: #6c757d;
+        }
+        .action-btn.secondary:hover {
+            background: #545b62;
+        }
+        .system-status {
+            padding: 20px 30px;
+            background: #e8f5e8;
+            border-top: 1px solid #c8e6c9;
+        }
+        .status-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 0;
+        }
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #4caf50;
+            margin-right: 8px;
+        }
+        .status-indicator.warning {
+            background: #ff9800;
+        }
+        .status-indicator.error {
+            background: #f44336;
+        }
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🤖 WhatsApp Bot Admin Dashboard</h1>
+            <p>ADHD-Friendly Personal Productivity Assistant</p>
+        </div>
+
+        <div class="stats-overview" id="statsOverview">
+            <div class="stat-card">
+                <div class="stat-number" id="totalUsers">-</div>
+                <div class="stat-label">Total Users</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number" id="totalMessages">-</div>
+                <div class="stat-label">Total Messages</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number" id="activeUsers">-</div>
+                <div class="stat-label">Active Today</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number" id="systemStatus">Online</div>
+                <div class="stat-label">Bot Status</div>
+            </div>
+        </div>
+
+        <div class="nav-cards">
+            <div class="nav-card" onclick="window.location.href='/admin/users'">
+                <span class="icon">👥</span>
+                <h3>User Management</h3>
+                <p>View detailed user interactions, messages, voice notes, reminders, and analytics for each user</p>
+            </div>
+
+            <div class="nav-card" onclick="loadQuickOverview()">
+                <span class="icon">📊</span>
+                <h3>System Overview</h3>
+                <p>Real-time statistics, recent activity, and system performance metrics</p>
+            </div>
+
+            <div class="nav-card" onclick="window.location.href='/admin/messages'">
+                <span class="icon">💬</span>
+                <h3>Recent Messages</h3>
+                <p>Browse all recent messages, classifications, and bot responses</p>
+            </div>
+
+            <div class="nav-card" onclick="openAnalytics()">
+                <span class="icon">📈</span>
+                <h3>Analytics</h3>
+                <p>Usage patterns, popular features, and user engagement insights</p>
+            </div>
+        </div>
+
+        <div class="quick-actions">
+            <h3>Quick Actions</h3>
+            <div class="action-buttons">
+                <button class="action-btn" onclick="refreshData()">🔄 Refresh Data</button>
+                <button class="action-btn" onclick="testWebhook()">🔧 Test Webhook</button>
+                <a href="/admin/users" class="action-btn">👥 Browse Users</a>
+                <a href="/admin/messages" class="action-btn">💬 View Messages</a>
+                <button class="action-btn secondary" onclick="exportData()">📥 Export Data</button>
+                <button class="action-btn secondary" onclick="viewLogs()">📋 View Logs</button>
+            </div>
+        </div>
+
+        <div class="system-status">
+            <h3 style="margin-top: 0; color: #2e7d32;">System Status</h3>
+            <div class="status-item">
+                <span><span class="status-indicator"></span>Database Connection</span>
+                <span id="dbStatus">✅ Connected</span>
+            </div>
+            <div class="status-item">
+                <span><span class="status-indicator"></span>WhatsApp API</span>
+                <span id="whatsappStatus">✅ Active</span>
+            </div>
+            <div class="status-item">
+                <span><span class="status-indicator"></span>WhatsApp Token</span>
+                <span id="tokenStatus">⏳ Checking...</span>
+            </div>
+            <div class="status-item">
+                <span><span class="status-indicator"></span>Message Processing</span>
+                <span id="processingStatus">✅ Running</span>
+            </div>
+            <div class="status-item">
+                <span><span class="status-indicator"></span>Last Updated</span>
+                <span id="lastUpdated">-</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Load dashboard data on page load
+        window.onload = function() {
+            loadDashboardData();
+            
+            // Auto-refresh every 30 seconds
+            setInterval(loadDashboardData, 30000);
+        };
+
+        async function loadDashboardData() {
+            try {
+                // Load overview statistics
+                const response = await fetch('/admin/api/dashboard-stats');
+                const data = await response.json();
+                
+                if (data.status === 'success') {
+                    document.getElementById('totalUsers').textContent = data.total_users || 0;
+                    document.getElementById('totalMessages').textContent = data.total_messages || 0;
+                    document.getElementById('activeUsers').textContent = data.active_users || 0;
+                    document.getElementById('systemStatus').textContent = data.system_status || 'Unknown';
+                }
+                
+                // Check token status
+                await checkTokenStatus();
+                
+                document.getElementById('lastUpdated').textContent = new Date().toLocaleTimeString();
+                
+            } catch (error) {
+                console.error('Error loading dashboard data:', error);
+                document.getElementById('lastUpdated').textContent = 'Error loading data';
+                document.getElementById('totalUsers').textContent = '⚠️';
+                document.getElementById('totalMessages').textContent = '⚠️';
+                document.getElementById('activeUsers').textContent = '⚠️';
+                document.getElementById('systemStatus').textContent = 'Error';
+            }
+        }
+
+        async function checkTokenStatus() {
+            try {
+                const response = await fetch('/admin/token-status');
+                const data = await response.json();
+                
+                const tokenStatusElement = document.getElementById('tokenStatus');
+                
+                if (data.validation && data.validation.valid) {
+                    const expiresAt = data.status.expires_at;
+                    if (data.status.expires_soon) {
+                        tokenStatusElement.innerHTML = '⚠️ Expires Soon';
+                        tokenStatusElement.style.color = '#f57c00';
+                    } else {
+                        tokenStatusElement.innerHTML = '✅ Valid';
+                        tokenStatusElement.style.color = '#4caf50';
+                    }
+                    
+                    if (expiresAt) {
+                        const expiryDate = new Date(expiresAt);
+                        tokenStatusElement.title = `Expires: ${expiryDate.toLocaleString()}`;
+                    }
+                } else {
+                    tokenStatusElement.innerHTML = '❌ Invalid/Expired';
+                    tokenStatusElement.style.color = '#f44336';
+                    tokenStatusElement.title = 'Token needs renewal - check console for details';
+                }
+                
+            } catch (error) {
+                console.error('Error checking token status:', error);
+                document.getElementById('tokenStatus').innerHTML = '❓ Unknown';
+            }
+        }
+
+        async function refreshData() {
+            const btn = event.target;
+            btn.textContent = '🔄 Refreshing...';
+            btn.disabled = true;
+            
+            await loadDashboardData();
+            
+            btn.textContent = '🔄 Refresh Data';
+            btn.disabled = false;
+        }
+
+        async function testWebhook() {
+            try {
+                const response = await fetch('/webhook/test', { method: 'POST' });
+                const data = await response.json();
+                alert(`Webhook test: ${data.status}`);
+            } catch (error) {
+                alert(`Webhook test failed: ${error.message}`);
+            }
+        }
+
+        function loadQuickOverview() {
+            // Show recent activity in a modal or redirect to detailed view
+            window.location.href = '/admin/messages';
+        }
+
+        function openAnalytics() {
+            // For now, redirect to user management where analytics are available
+            alert('📊 Analytics view - detailed analytics available in User Management section');
+            window.location.href = '/admin/users';
+        }
+
+        function exportData() {
+            alert('📥 Export functionality would be implemented here - CSV/JSON export of all data');
+        }
+
+        function viewLogs() {
+            alert('📋 System logs viewer would be implemented here');
+        }
+    </script>
+</body>
+</html>

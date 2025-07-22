@@ -51,11 +51,27 @@ class DatabaseManager:
     async def setup_database(self):
         """Setup database schema and extensions if needed."""
         try:
-            # Enable pgvector extension
-            self.admin_client.rpc('enable_pgvector').execute()
-            logger.info("Database setup completed")
+            # Check if vector search is available by testing a simple query
+            logger.info("Checking vector search availability...")
+            result = self.client.table("messages").select("id").limit(1).execute()
+            logger.info("✅ Database connection verified")
+            
+            # Try to check if pgvector functions are available
+            try:
+                result = self.admin_client.rpc('search_messages_by_vector', {
+                    'user_id': '00000000-0000-0000-0000-000000000000',
+                    'query_embedding': [0.0] * 1536,
+                    'match_count': 1
+                }).execute()
+                logger.info("✅ Vector search functions available")
+            except Exception as ve:
+                logger.info("ℹ️  Vector search functions not available (run additional_analytics.sql for enhanced features)")
+                logger.debug(f"Vector function check: {ve}")
+            
+            return True
         except Exception as e:
-            logger.warning(f"Database setup warning: {e}")
+            logger.error(f"Database setup failed: {e}")
+            return False
 
 
 # Global database manager instance

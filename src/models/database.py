@@ -63,7 +63,7 @@ class Message(BaseModel):
     """Message model for database storage."""
     id: Optional[UUID] = None
     user_id: UUID
-    timestamp: datetime
+    message_timestamp: datetime
     type: MessageType
     content: str
     tags: Optional[List[str]] = []

@@ -7,8 +7,8 @@ import re
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 from openai import AsyncOpenAI
-from ..config.settings import settings
-from ..models.message_types import ClassificationResult
+from config.settings import settings
+from models.message_types import ClassificationResult
 
 logger = logging.getLogger(__name__)
 
@@ -125,10 +125,19 @@ Rules:
         return prompt
     
     def _is_tags_only(self, content: str) -> bool:
-        """Check if message contains only hashtags."""
+        """Check if message contains only hashtags and looks like a brain dump session start."""
         # Remove whitespace and check if all words start with #
         words = content.strip().split()
-        return len(words) > 0 and all(word.startswith('#') for word in words)
+        if not words or not all(word.startswith('#') for word in words):
+            return False
+        
+        # Must have multiple tags (brain dumps typically use multiple tags)
+        if len(words) < 2:
+            return False
+        
+        # Additional context check - avoid misclassifying simple tag responses
+        # Brain dumps typically have 2+ tags and often more meaningful combinations
+        return len(words) >= 2
     
     def _extract_tags(self, content: str) -> List[str]:
         """Extract hashtags from content."""

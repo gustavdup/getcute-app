@@ -17,10 +17,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from src.config.settings import settings
-from src.config.database import db_manager
-from src.handlers.webhook_handler import webhook_router
-from src.handlers.slash_commands import commands_router
+from config.settings import settings
+from config.database import db_manager
+from handlers.webhook_handler import webhook_router
+from handlers.slash_commands import commands_router
 
 # Configure logging
 logging.basicConfig(
@@ -50,9 +50,30 @@ app.add_middleware(
 app.mount("/static", StaticFiles(directory="portal/static"), name="static")
 templates = Jinja2Templates(directory="portal/templates")
 
+# Import admin panel from admin folder
+admin_path = Path(__file__).parent.parent / "admin"
+sys.path.insert(0, str(admin_path))
+
 # Include routers
 app.include_router(webhook_router, prefix="/webhook", tags=["webhook"])
 app.include_router(commands_router, prefix="/api", tags=["commands"])
+
+# Import admin router after path is set
+try:
+    from admin_panel import admin_router  # type: ignore
+    app.include_router(admin_router, prefix="/admin", tags=["admin"])
+    logger.info("Admin panel loaded successfully")
+    
+    # Also include the comprehensive user admin router with different prefix
+    from user_admin import user_admin_router  # type: ignore
+    app.include_router(user_admin_router, prefix="/admin/user", tags=["user-admin"])
+    logger.info("User admin panel loaded successfully")
+except ImportError as e:
+    logger.warning(f"Could not load admin panel: {e}")
+    # Add a simple fallback admin endpoint
+    @app.get("/admin")
+    async def admin_fallback():
+        return {"message": "Admin panel not available", "error": str(e)}
 
 
 @app.on_event("startup")

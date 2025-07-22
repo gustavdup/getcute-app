@@ -6,8 +6,8 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
 from uuid import UUID, uuid4
 
-from ..config.database import get_db_client, get_admin_client
-from ..models.database import (
+from config.database import get_db_client, get_admin_client
+from models.database import (
     User, Message, Reminder, Birthday, Session,
     MessageType, SourceType, SessionStatus, RepeatType
 )
@@ -26,19 +26,19 @@ class SupabaseService:
     async def get_or_create_user(self, phone_number: str, platform: str = "whatsapp") -> User:
         """Get existing user or create new one."""
         try:
-            # Try to get existing user
-            result = self.client.table("users").select("*").eq("phone_number", phone_number).execute()
+            # Try to get existing user (use admin client to bypass RLS)
+            result = self.admin_client.table("users").select("*").eq("phone_number", phone_number).execute()
             
             if result.data:
                 user_data = result.data[0]
                 user_data['last_seen'] = datetime.now()
                 
-                # Update last_seen
-                self.client.table("users").update({"last_seen": user_data['last_seen'].isoformat()}).eq("id", user_data['id']).execute()
+                # Update last_seen (use admin client)
+                self.admin_client.table("users").update({"last_seen": user_data['last_seen'].isoformat()}).eq("id", user_data['id']).execute()
                 
                 return User(**user_data)
             else:
-                # Create new user
+                # Create new user (use admin client to bypass RLS)
                 new_user = User(
                     id=uuid4(),
                     phone_number=phone_number,
@@ -47,7 +47,13 @@ class SupabaseService:
                     last_seen=datetime.now()
                 )
                 
-                result = self.client.table("users").insert(new_user.dict()).execute()
+                # Convert to dict with proper serialization
+                user_data = new_user.dict()
+                user_data['id'] = str(user_data['id'])  # Convert UUID to string
+                user_data['created_at'] = user_data['created_at'].isoformat()
+                user_data['last_seen'] = user_data['last_seen'].isoformat()
+                
+                result = self.admin_client.table("users").insert(user_data).execute()
                 return User(**result.data[0])
                 
         except Exception as e:
@@ -72,7 +78,16 @@ class SupabaseService:
             if not message.id:
                 message.id = uuid4()
             
-            result = self.client.table("messages").insert(message.dict()).execute()
+            # Convert to dict with proper serialization
+            message_data = message.dict()
+            message_data['id'] = str(message_data['id'])  # Convert UUID to string
+            message_data['user_id'] = str(message_data['user_id'])  # Convert UUID to string
+            if message_data.get('session_id'):
+                message_data['session_id'] = str(message_data['session_id'])
+            message_data['message_timestamp'] = message_data['message_timestamp'].isoformat()
+            
+            # Use admin client to bypass RLS
+            result = self.admin_client.table("messages").insert(message_data).execute()
             return Message(**result.data[0])
         except Exception as e:
             logger.error(f"Error saving message: {e}")
@@ -99,9 +114,9 @@ class SupabaseService:
                     query = query.contains("tags", [tag])
             
             if since:
-                query = query.gte("timestamp", since.isoformat())
+                query = query.gte("message_timestamp", since.isoformat())
             
-            result = query.order("timestamp", desc=True).limit(limit).execute()
+            result = query.order("message_timestamp", desc=True).limit(limit).execute()
             return [Message(**msg) for msg in result.data]
         except Exception as e:
             logger.error(f"Error getting user messages: {e}")
@@ -114,7 +129,7 @@ class SupabaseService:
         limit: int = 10,
         similarity_threshold: float = 0.7
     ) -> List[Dict[str, Any]]:
-        """Search messages using vector similarity."""
+        """Search messages using vector similarity (requires pgvector setup)."""
         try:
             # Use RPC call for vector search with pgvector
             result = self.client.rpc(
@@ -129,7 +144,29 @@ class SupabaseService:
             
             return result.data
         except Exception as e:
-            logger.error(f"Error in vector search: {e}")
+            logger.info("Vector search not available - using text search fallback")
+            logger.debug(f"Vector search error: {e}")
+            
+            # Fallback to regular text search
+            return await self._fallback_text_search(user_id, limit)
+    
+    async def _fallback_text_search(self, user_id: UUID, limit: int) -> List[Dict[str, Any]]:
+        """Fallback text search when vector search is not available."""
+        try:
+            result = self.client.table("messages").select("*").eq("user_id", str(user_id)).order("message_timestamp", desc=True).limit(limit).execute()
+            
+            # Convert to vector search format
+            return [
+                {
+                    "content": msg.get("content", ""),
+                    "similarity": 1.0,  # Default similarity
+                    "timestamp": msg.get("message_timestamp") or msg.get("timestamp"),  # Handle both column names
+                    "tags": msg.get("tags", [])
+                }
+                for msg in (result.data or [])
+            ]
+        except Exception as e:
+            logger.error(f"Fallback search failed: {e}")
             return []
     
     # Reminder Operations
@@ -140,7 +177,16 @@ class SupabaseService:
                 reminder.id = uuid4()
                 reminder.created_at = datetime.now()
             
-            result = self.client.table("reminders").insert(reminder.dict()).execute()
+            # Convert to dict with proper serialization
+            reminder_data = reminder.dict()
+            reminder_data['id'] = str(reminder_data['id'])
+            reminder_data['user_id'] = str(reminder_data['user_id'])
+            reminder_data['created_at'] = reminder_data['created_at'].isoformat()
+            reminder_data['trigger_time'] = reminder_data['trigger_time'].isoformat()
+            if reminder_data.get('completed_at'):
+                reminder_data['completed_at'] = reminder_data['completed_at'].isoformat()
+            
+            result = self.admin_client.table("reminders").insert(reminder_data).execute()
             return Reminder(**result.data[0])
         except Exception as e:
             logger.error(f"Error saving reminder: {e}")
@@ -188,7 +234,14 @@ class SupabaseService:
                 birthday.id = uuid4()
                 birthday.created_at = datetime.now()
             
-            result = self.client.table("birthdays").insert(birthday.dict()).execute()
+            # Convert to dict with proper serialization
+            birthday_data = birthday.dict()
+            birthday_data['id'] = str(birthday_data['id'])
+            birthday_data['user_id'] = str(birthday_data['user_id'])
+            birthday_data['created_at'] = birthday_data['created_at'].isoformat()
+            birthday_data['birthdate'] = birthday_data['birthdate'].isoformat() if hasattr(birthday_data['birthdate'], 'isoformat') else str(birthday_data['birthdate'])
+            
+            result = self.admin_client.table("birthdays").insert(birthday_data).execute()
             return Birthday(**result.data[0])
         except Exception as e:
             logger.error(f"Error saving birthday: {e}")
@@ -206,7 +259,7 @@ class SupabaseService:
     async def get_upcoming_birthdays(self, user_id: UUID, days_ahead: int = 30) -> List[Birthday]:
         """Get upcoming birthdays within specified days."""
         try:
-            # This would need custom SQL for date calculations across years
+            # Try custom RPC function for date calculations across years
             result = self.client.rpc(
                 'get_upcoming_birthdays',
                 {
@@ -217,8 +270,11 @@ class SupabaseService:
             
             return [Birthday(**b) for b in result.data]
         except Exception as e:
-            logger.error(f"Error getting upcoming birthdays: {e}")
-            return []
+            logger.info("Advanced birthday search not available - using simple fallback")
+            logger.debug(f"Birthday RPC error: {e}")
+            
+            # Fallback: just get all birthdays
+            return await self.get_user_birthdays(user_id)
     
     # Session Operations
     async def create_session(self, user_id: UUID, session_type: str = "brain_dump", tags: Optional[List[str]] = None) -> Session:
@@ -233,7 +289,15 @@ class SupabaseService:
                 tags=tags or []
             )
             
-            result = self.client.table("sessions").insert(session.dict()).execute()
+            # Convert to dict with proper serialization
+            session_data = session.dict()
+            session_data['id'] = str(session_data['id'])
+            session_data['user_id'] = str(session_data['user_id'])
+            session_data['start_time'] = session_data['start_time'].isoformat()
+            if session_data.get('end_time'):
+                session_data['end_time'] = session_data['end_time'].isoformat()
+            
+            result = self.admin_client.table("sessions").insert(session_data).execute()
             return Session(**result.data[0])
         except Exception as e:
             logger.error(f"Error creating session: {e}")
@@ -254,7 +318,7 @@ class SupabaseService:
     async def end_session(self, session_id: UUID, status: SessionStatus = SessionStatus.COMPLETED) -> bool:
         """End a session."""
         try:
-            result = self.client.table("sessions").update({
+            result = self.admin_client.table("sessions").update({
                 "status": status.value,
                 "end_time": datetime.now().isoformat()
             }).eq("id", str(session_id)).execute()
@@ -268,7 +332,7 @@ class SupabaseService:
     async def get_user_tags(self, user_id: UUID) -> Dict[str, int]:
         """Get user tags with usage counts."""
         try:
-            # This would need a custom RPC function to aggregate tags
+            # Try custom RPC function to aggregate tags
             result = self.client.rpc(
                 'get_user_tag_counts',
                 {'user_id': str(user_id)}
@@ -276,17 +340,42 @@ class SupabaseService:
             
             return {item['tag']: item['count'] for item in result.data}
         except Exception as e:
-            logger.error(f"Error getting user tags: {e}")
-            return {}
+            logger.info("Advanced tag counting not available - using simple fallback")
+            logger.debug(f"Tag RPC error: {e}")
+            
+            # Fallback: extract tags from messages manually
+            try:
+                messages = await self.get_user_messages(user_id, limit=100)
+                tag_counts = {}
+                for msg in messages:
+                    if msg.tags:
+                        for tag in msg.tags:
+                            tag_counts[tag] = tag_counts.get(tag, 0) + 1
+                return tag_counts
+            except Exception as fallback_error:
+                logger.error(f"Tag fallback failed: {fallback_error}")
+                return {}
     
     async def update_message_vector(self, message_id: UUID, embedding: List[float]) -> bool:
         """Update message with vector embedding."""
         try:
-            result = self.client.table("messages").update({
+            result = self.admin_client.table("messages").update({
                 "vector_embedding": embedding
             }).eq("id", str(message_id)).execute()
             
             return len(result.data) > 0
         except Exception as e:
             logger.error(f"Error updating message vector: {e}")
+            return False
+
+    async def update_message_tags(self, message_id: UUID, tags: List[str]) -> bool:
+        """Update message with new tags."""
+        try:
+            result = self.admin_client.table("messages").update({
+                "tags": tags
+            }).eq("id", str(message_id)).execute()
+            
+            return len(result.data) > 0
+        except Exception as e:
+            logger.error(f"Error updating message tags: {e}")
             return False
