@@ -15,6 +15,7 @@ class MessageType(str, Enum):
     BIRTHDAY = "birthday"
     SLASH_COMMAND = "slash_command"
     BRAIN_DUMP = "brain_dump"
+    COMMAND = "command"
 
 
 class SourceType(str, Enum):

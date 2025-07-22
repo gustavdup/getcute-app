@@ -193,6 +193,9 @@ class MessageRouter:
         """Handle slash commands with simplified brain dump logic."""
         command = message.content.lower().strip()
         
+        # Save the command as a message record first
+        await self._save_command_message(message, user)
+        
         if command.startswith('/bd'):
             await self._start_brain_dump_session(message, user)
         elif command in ['/cancel', '/end']:
@@ -502,6 +505,37 @@ class MessageRouter:
                                                 
         except Exception as e:
             self.msg_logger.log_error_stage("REGULAR_NOTE_ERROR", e,
+                                          {"message_id": message.message_id, "user_phone": message.user_phone})
+
+    async def _save_command_message(self, message: ProcessedMessage, user: User):
+        """Save a user command as a message record for timeline visibility."""
+        try:
+            if not user.id:
+                logger.error("User ID is None - cannot save command message")
+                return
+                
+            # Create message object for the command
+            command_message = Message(
+                user_id=user.id,
+                message_timestamp=datetime.now(timezone.utc),
+                type=MessageType.COMMAND,
+                content=message.content or "",
+                tags=[],
+                source_type=SourceType.TEXT,
+                origin_message_id=message.message_id,
+                vector_embedding=None
+            )
+            
+            # Save the command message
+            saved_message = await self.db_service.save_message(command_message)
+            
+            if saved_message:
+                self.msg_logger.log_success_stage("COMMAND_SAVED",
+                                                {"message_id": message.message_id, "user_phone": message.user_phone},
+                                                f"Command saved: {message.content}")
+                                                
+        except Exception as e:
+            self.msg_logger.log_error_stage("COMMAND_SAVE_ERROR", e,
                                           {"message_id": message.message_id, "user_phone": message.user_phone})
 
     async def _send_welcome_message(self, user_phone: str, user) -> None:

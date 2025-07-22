@@ -276,22 +276,23 @@ def organize_user_data(messages: List[Dict], reminders: List[Dict], birthdays: L
         msg_type = msg.get("type", "note")
         msg_tags = msg.get("tags", [])
         
-        # Skip bot responses for all tabs except timeline (they have "bot-response" tag)
+        # Skip bot responses and commands for all tabs except timeline
         is_bot_response = "bot-response" in msg_tags if msg_tags else False
+        is_command = msg_type == "command"
         
-        # Collect all tags (including from bot responses)
+        # Collect all tags (including from bot responses and commands)
         if msg_tags:
             organized["tags"].update(msg_tags)
         
-        # Categorize messages (skip bot responses for notes/brain_dumps)
-        if not is_bot_response:
+        # Categorize messages (skip bot responses and commands for notes/brain_dumps)
+        if not is_bot_response and not is_command:
             if msg_type == "brain_dump":
                 organized["brain_dumps"].append(msg)
             else:
                 organized["notes"].append(msg)
         
-        # Categorize by media type (skip bot responses for media tabs)
-        if not is_bot_response and msg.get("file_info"):
+        # Categorize by media type (skip bot responses and commands for media tabs)
+        if not is_bot_response and not is_command and msg.get("file_info"):
             file_info = msg["file_info"]
             file_data = {**msg, "file_info": file_info}
             file_type = file_info.get("file_type", "")
