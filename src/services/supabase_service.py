@@ -6,13 +6,15 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
 from uuid import UUID, uuid4
 
-from config.database import get_db_client, get_admin_client
-from models.database import (
-    User, Message, Reminder, Birthday, Session,
-    MessageType, SourceType, SessionStatus, RepeatType
+from src.config.database import get_db_client, get_admin_client
+from src.models.database import (
+    User, Message, Reminder, Birthday, Session, File,
+    MessageType, SourceType, SessionStatus, RepeatType, FileType, UploadStatus, TranscriptionStatus
 )
+from src.utils.logger import get_message_logger, safe_log_content
 
 logger = logging.getLogger(__name__)
+msg_logger = get_message_logger()
 
 
 class SupabaseService:
@@ -23,8 +25,8 @@ class SupabaseService:
         self.admin_client = get_admin_client()
     
     # User Operations
-    async def get_or_create_user(self, phone_number: str, platform: str = "whatsapp") -> User:
-        """Get existing user or create new one."""
+    async def get_or_create_user(self, phone_number: str, platform: str = "whatsapp") -> tuple[User, bool]:
+        """Get existing user or create new one. Returns (user, is_new_user)."""
         try:
             # Try to get existing user (use admin client to bypass RLS)
             result = self.admin_client.table("users").select("*").eq("phone_number", phone_number).execute()
@@ -36,7 +38,7 @@ class SupabaseService:
                 # Update last_seen (use admin client)
                 self.admin_client.table("users").update({"last_seen": user_data['last_seen'].isoformat()}).eq("id", user_data['id']).execute()
                 
-                return User(**user_data)
+                return User(**user_data), False  # Existing user
             else:
                 # Create new user (use admin client to bypass RLS)
                 new_user = User(
@@ -54,7 +56,7 @@ class SupabaseService:
                 user_data['last_seen'] = user_data['last_seen'].isoformat()
                 
                 result = self.admin_client.table("users").insert(user_data).execute()
-                return User(**result.data[0])
+                return User(**result.data[0]), True  # New user
                 
         except Exception as e:
             logger.error(f"Error in get_or_create_user: {e}")
@@ -71,10 +73,26 @@ class SupabaseService:
             logger.error(f"Error getting user {user_id}: {e}")
             return None
     
+    def _serialize_nested_objects(self, obj: Any) -> Any:
+        """Recursively convert UUID objects and other non-serializable objects to strings."""
+        if isinstance(obj, UUID):
+            return str(obj)
+        elif isinstance(obj, datetime):
+            return obj.isoformat()
+        elif isinstance(obj, dict):
+            return {key: self._serialize_nested_objects(value) for key, value in obj.items()}
+        elif isinstance(obj, list):
+            return [self._serialize_nested_objects(item) for item in obj]
+        else:
+            return obj
+    
     # Message Operations
     async def save_message(self, message: Message) -> Message:
         """Save a message to the database."""
         try:
+            logger.info(f"Saving message: {safe_log_content(message.content)}...")
+            msg_logger.log_database_operation("INSERT", "messages", None, success=True)
+            
             if not message.id:
                 message.id = uuid4()
             
@@ -86,11 +104,22 @@ class SupabaseService:
                 message_data['session_id'] = str(message_data['session_id'])
             message_data['message_timestamp'] = message_data['message_timestamp'].isoformat()
             
+            # Recursively convert any UUID objects in metadata to strings
+            if message_data.get('metadata'):
+                message_data['metadata'] = self._serialize_nested_objects(message_data['metadata'])
+            
             # Use admin client to bypass RLS
             result = self.admin_client.table("messages").insert(message_data).execute()
-            return Message(**result.data[0])
+            
+            saved_message = Message(**result.data[0])
+            logger.info(f"Successfully saved message with ID: {saved_message.id}")
+            msg_logger.log_database_operation("INSERT", "messages", str(saved_message.id), success=True)
+            
+            return saved_message
+            
         except Exception as e:
             logger.error(f"Error saving message: {e}")
+            msg_logger.log_database_operation("INSERT", "messages", None, success=False, error=str(e))
             raise
     
     async def get_user_messages(
@@ -230,6 +259,9 @@ class SupabaseService:
     async def save_birthday(self, birthday: Birthday) -> Birthday:
         """Save a birthday to the database."""
         try:
+            logger.info(f"Saving birthday for {birthday.person_name}")
+            msg_logger.log_database_operation("INSERT", "birthdays", None, success=True)
+            
             if not birthday.id:
                 birthday.id = uuid4()
                 birthday.created_at = datetime.now()
@@ -242,9 +274,16 @@ class SupabaseService:
             birthday_data['birthdate'] = birthday_data['birthdate'].isoformat() if hasattr(birthday_data['birthdate'], 'isoformat') else str(birthday_data['birthdate'])
             
             result = self.admin_client.table("birthdays").insert(birthday_data).execute()
-            return Birthday(**result.data[0])
+            
+            saved_birthday = Birthday(**result.data[0])
+            logger.info(f"Successfully saved birthday for {birthday.person_name} with ID: {saved_birthday.id}")
+            msg_logger.log_database_operation("INSERT", "birthdays", str(saved_birthday.id), success=True)
+            
+            return saved_birthday
+            
         except Exception as e:
-            logger.error(f"Error saving birthday: {e}")
+            logger.error(f"Error saving birthday for {birthday.person_name}: {e}")
+            msg_logger.log_database_operation("INSERT", "birthdays", None, success=False, error=str(e))
             raise
     
     async def get_user_birthdays(self, user_id: UUID) -> List[Birthday]:
@@ -379,3 +418,74 @@ class SupabaseService:
         except Exception as e:
             logger.error(f"Error updating message tags: {e}")
             return False
+
+    # File Operations
+    async def save_file_record(self, file: File) -> File:
+        """Save a file record to the database."""
+        try:
+            logger.info(f"Saving file record: {file.original_filename}")
+            
+            if not file.id:
+                file.id = uuid4()
+            if not file.created_at:
+                file.created_at = datetime.now()
+            
+            # Convert to dict with proper serialization
+            file_data = file.dict()
+            file_data['id'] = str(file_data['id'])
+            file_data['user_id'] = str(file_data['user_id'])
+            if file_data.get('message_id'):
+                file_data['message_id'] = str(file_data['message_id'])
+            file_data['created_at'] = file_data['created_at'].isoformat()
+            if file_data.get('deleted_at'):
+                file_data['deleted_at'] = file_data['deleted_at'].isoformat()
+            
+            result = self.admin_client.table("files").insert(file_data).execute()
+            
+            saved_file = File(**result.data[0])
+            logger.info(f"Successfully saved file record with ID: {saved_file.id}")
+            
+            return saved_file
+            
+        except Exception as e:
+            logger.error(f"Error saving file record: {e}")
+            raise
+    
+    async def get_user_files(self, user_id: UUID, file_type: Optional[str] = None) -> List[File]:
+        """Get user files."""
+        try:
+            query = self.client.table("files").select("*").eq("user_id", str(user_id)).eq("upload_status", "completed").is_("deleted_at", "null")
+            
+            if file_type:
+                query = query.eq("file_type", file_type)
+            
+            result = query.order("created_at", desc=True).execute()
+            return [File(**f) for f in result.data]
+        except Exception as e:
+            logger.error(f"Error getting user files: {e}")
+            return []
+    
+    async def update_file_status(self, file_id: UUID, upload_status: str, transcription_text: Optional[str] = None) -> bool:
+        """Update file upload status and transcription."""
+        try:
+            update_data = {"upload_status": upload_status}
+            if transcription_text:
+                update_data["transcription_text"] = transcription_text
+                update_data["transcription_status"] = "completed"
+            
+            result = self.admin_client.table("files").update(update_data).eq("id", str(file_id)).execute()
+            return len(result.data) > 0
+        except Exception as e:
+            logger.error(f"Error updating file status: {e}")
+            return False
+    
+    async def get_file_by_id(self, file_id: UUID) -> Optional[File]:
+        """Get file by ID."""
+        try:
+            result = self.client.table("files").select("*").eq("id", str(file_id)).execute()
+            if result.data:
+                return File(**result.data[0])
+            return None
+        except Exception as e:
+            logger.error(f"Error getting file {file_id}: {e}")
+            return None

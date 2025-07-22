@@ -3,7 +3,7 @@ WhatsApp webhook handler for processing incoming messages.
 """
 import logging
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any
 from fastapi import APIRouter, Request, HTTPException, Query
 from fastapi.responses import PlainTextResponse
@@ -21,6 +21,10 @@ webhook_router = APIRouter()
 db_service = SupabaseService()
 whatsapp_service = WhatsAppService(db_service)
 message_router = MessageRouter(whatsapp_service)
+
+# Message deduplication cache (in production, use Redis or database)
+processed_message_ids = set()
+MAX_CACHE_SIZE = 1000  # Prevent memory issues
 
 
 @webhook_router.get("/")
@@ -90,11 +94,23 @@ async def process_messages(value: Dict[str, Any]):
                 logger.warning("Missing required message fields")
                 continue
             
+            # Check for duplicate message processing
+            if message_id in processed_message_ids:
+                logger.info(f"Skipping duplicate message: {message_id}")
+                continue
+            
+            # Add to processed cache (with size limit)
+            processed_message_ids.add(message_id)
+            if len(processed_message_ids) > MAX_CACHE_SIZE:
+                # Remove oldest entries (simplified - in production use LRU cache)
+                processed_message_ids.pop()
+            
             # Convert timestamp
             try:
-                timestamp = datetime.fromtimestamp(int(timestamp_str))
+                # WhatsApp timestamps are in UTC, so use utcfromtimestamp
+                timestamp = datetime.utcfromtimestamp(int(timestamp_str))
             except (ValueError, TypeError):
-                timestamp = datetime.now()
+                timestamp = datetime.now(timezone.utc)
             
             # Extract content based on message type
             content = ""

@@ -64,7 +64,7 @@ async def user_detail_page(request: Request, user_id: str):
         
         # Get all messages without files join to avoid relationship conflicts
         messages_result = db_service.admin_client.table("messages").select(
-            "id, user_id, content, message_timestamp, type, tags, file_id"
+            "id, user_id, content, message_timestamp, type, tags, file_id, media_url, metadata"
         ).eq("user_id", user_id).order("message_timestamp", desc=True).execute()
         messages = messages_result.data if messages_result.data else []
         
@@ -112,9 +112,9 @@ async def get_user_timeline(user_id: str, days: int = Query(30, description="Num
     try:
         cutoff_date = datetime.now() - timedelta(days=days)
         
-        # Get all messages without files join to avoid relationship conflicts
+        # Get all messages without files join to avoid relationship conflicts (newest first)
         messages_result = db_service.admin_client.table("messages").select(
-            "id, user_id, content, message_timestamp, type, tags, file_id"
+            "id, user_id, content, message_timestamp, type, tags, file_id, media_url, metadata, source_type"
         ).eq("user_id", user_id).gte("message_timestamp", cutoff_date.isoformat()).order("message_timestamp", desc=True).execute()
         
         messages = messages_result.data if messages_result.data else []
@@ -274,19 +274,24 @@ def organize_user_data(messages: List[Dict], reminders: List[Dict], birthdays: L
     
     for msg in messages:
         msg_type = msg.get("type", "note")
+        msg_tags = msg.get("tags", [])
         
-        # Collect all tags
-        if msg.get("tags"):
-            organized["tags"].update(msg["tags"])
+        # Skip bot responses for all tabs except timeline (they have "bot-response" tag)
+        is_bot_response = "bot-response" in msg_tags if msg_tags else False
         
-        # Categorize messages
-        if msg_type == "brain_dump":
-            organized["brain_dumps"].append(msg)
-        else:
-            organized["notes"].append(msg)
+        # Collect all tags (including from bot responses)
+        if msg_tags:
+            organized["tags"].update(msg_tags)
         
-        # Categorize by media type
-        if msg.get("file_info"):
+        # Categorize messages (skip bot responses for notes/brain_dumps)
+        if not is_bot_response:
+            if msg_type == "brain_dump":
+                organized["brain_dumps"].append(msg)
+            else:
+                organized["notes"].append(msg)
+        
+        # Categorize by media type (skip bot responses for media tabs)
+        if not is_bot_response and msg.get("file_info"):
             file_info = msg["file_info"]
             file_data = {**msg, "file_info": file_info}
             file_type = file_info.get("file_type", "")

@@ -21,12 +21,10 @@ from config.settings import settings
 from config.database import db_manager
 from handlers.webhook_handler import webhook_router
 from handlers.slash_commands import commands_router
+from utils.logger import setup_application_logging
 
-# Configure logging
-logging.basicConfig(
-    level=getattr(logging, settings.log_level),
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+# Configure comprehensive logging
+setup_application_logging()
 logger = logging.getLogger(__name__)
 
 # Create FastAPI app

@@ -3,11 +3,11 @@ Slash command handler for processing bot commands.
 """
 import logging
 from typing import Dict, Any
-from models.message_types import ProcessedMessage, ClassificationResult
-from models.database import User
-from services.whatsapp_service import WhatsAppService
-from services.supabase_service import SupabaseService
-from services.auth_service import AuthService
+from src.models.message_types import ProcessedMessage, ClassificationResult
+from src.models.database import User
+from src.services.whatsapp_service import WhatsAppService
+from src.services.supabase_service import SupabaseService
+from src.services.auth_service import AuthService
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,8 @@ class SlashCommandHandler:
                 "/reminders": self._handle_reminders,
                 "/birthdays": self._handle_birthdays,
                 "/search": self._handle_search,
+                "/bd": self._handle_brain_dump,
+                "/cancel": self._handle_cancel_session,
                 "/end": self._handle_end_session
             }
             
@@ -172,20 +174,100 @@ class SlashCommandHandler:
                 
         except Exception as e:
             logger.error(f"Error handling end session command: {e}")
+
+    async def _handle_brain_dump(self, user: User, message: ProcessedMessage):
+        """Handle /bd command - start a brain dump session."""
+        try:
+            if not user.id:
+                await self.whatsapp_service.send_text_message(
+                    message.user_phone,
+                    "Unable to start brain dump session. Please try again."
+                )
+                return
+
+            # Parse tags from the command
+            import re
+            tags = re.findall(r'#(\w+)', message.content or "")
+            
+            # End any existing active session first
+            existing_session = await self.db_service.get_active_session(user.id)
+            if existing_session and existing_session.id:
+                await self.db_service.end_session(existing_session.id)
+
+            # Create new brain dump session
+            from src.models.database import SessionStatus
+            session = await self.db_service.create_session(
+                user_id=user.id,
+                session_type="brain_dump",
+                tags=tags
+            )
+
+            if session and session.id:
+                tags_text = " ".join([f"#{tag}" for tag in tags]) if tags else "No tags yet"
+                await self.whatsapp_service.send_text_message(
+                    message.user_phone,
+                    f"🧠 Brain dump session started!\n"
+                    f"Tags: {tags_text}\n\n"
+                    f"Send your thoughts - they'll be combined into one note.\n"
+                    f"Use /end or /cancel to finish, or I'll auto-save after 5 minutes of inactivity."
+                )
+            else:
+                await self.whatsapp_service.send_text_message(
+                    message.user_phone,
+                    "❌ Failed to start brain dump session. Please try again."
+                )
+                
+        except Exception as e:
+            logger.error(f"Error starting brain dump session: {e}")
+            await self.whatsapp_service.send_text_message(
+                message.user_phone,
+                "❌ Failed to start brain dump session. Please try again."
+            )
+
+    async def _handle_cancel_session(self, user: User, message: ProcessedMessage):
+        """Handle /cancel command - cancel active brain dump session."""
+        try:
+            if not user.id:
+                return
+                
+            active_session = await self.db_service.get_active_session(user.id)
+            
+            if active_session and active_session.id:
+                # End the session with cancelled status
+                from src.models.database import SessionStatus
+                await self.db_service.end_session(active_session.id, SessionStatus.CANCELLED)
+                await self.whatsapp_service.send_text_message(
+                    message.user_phone,
+                    "❌ Brain dump session cancelled. Your messages were not saved."
+                )
+            else:
+                await self.whatsapp_service.send_text_message(
+                    message.user_phone,
+                    "No active brain dump session to cancel."
+                )
+                
+        except Exception as e:
+            logger.error(f"Error cancelling session: {e}")
+            await self.whatsapp_service.send_text_message(
+                message.user_phone,
+                "❌ Error cancelling session. Please try again."
+            )
     
     async def _handle_unknown_command(self, user: User, message: ProcessedMessage, command: str):
         """Handle unknown slash commands."""
         await self.whatsapp_service.send_text_message(
             message.user_phone,
             f"Unknown command: {command}\n\nAvailable commands:\n"
+            "• /bd [#tags] - Start brain dump session\n"
+            "• /end - End brain dump session\n"
+            "• /cancel - Cancel brain dump session\n"
             "• /portal - Access your dashboard\n"
             "• /help - Get help\n"
             "• /tags - View your tags\n"
             "• /notes - Manage notes\n"
             "• /reminders - Manage reminders\n"
             "• /birthdays - Manage birthdays\n"
-            "• /search - Search your content\n"
-            "• /end - End brain dump session"
+            "• /search - Search your content"
         )
 
 
@@ -199,13 +281,15 @@ async def commands_info():
     """Information about available commands."""
     return {
         "commands": [
+            {"command": "/bd [#tags]", "description": "Start a brain dump session with optional tags"},
+            {"command": "/end", "description": "End active brain dump session"},
+            {"command": "/cancel", "description": "Cancel active brain dump session"},
             {"command": "/portal", "description": "Access your personal dashboard"},
             {"command": "/help", "description": "Get help and guidance"},
             {"command": "/tags", "description": "View and manage your tags"},
             {"command": "/notes", "description": "Access your notes"},
             {"command": "/reminders", "description": "Manage your reminders"},
             {"command": "/birthdays", "description": "Track birthdays"},
-            {"command": "/search", "description": "Search your content"},
-            {"command": "/end", "description": "End brain dump session"}
+            {"command": "/search", "description": "Search your content"}
         ]
     }

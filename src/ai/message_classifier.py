@@ -7,8 +7,8 @@ import re
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 from openai import AsyncOpenAI
-from config.settings import settings
-from models.message_types import ClassificationResult
+from src.config.settings import settings
+from src.models.message_types import ClassificationResult
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +19,31 @@ class MessageClassifier:
     def __init__(self):
         self.client = AsyncOpenAI(api_key=settings.openai_api_key)
         self.model = settings.openai_model
+    
+    async def generate_completion(self, messages, max_tokens=500, temperature=0.1):
+        """
+        Generate a completion using OpenAI for general use by handlers.
+        
+        Args:
+            messages: List of message dicts with 'role' and 'content'
+            max_tokens: Maximum tokens to generate
+            temperature: Sampling temperature
+            
+        Returns:
+            String response content
+        """
+        try:
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature
+            )
+            content = response.choices[0].message.content
+            return content.strip() if content else ""
+        except Exception as e:
+            logger.error(f"OpenAI completion error: {e}")
+            return None
     
     async def classify_message(self, content: str, user_context: Optional[Dict[str, Any]] = None) -> ClassificationResult:
         """
@@ -60,11 +85,22 @@ class MessageClassifier:
             )
             
             result_text = response.choices[0].message.content
-            if not result_text:
+            if not result_text or not result_text.strip():
                 logger.warning("Empty response from OpenAI")
                 return self._fallback_classification(content)
+            
+            # Clean up the response text - sometimes OpenAI adds extra characters
+            result_text = result_text.strip()
+            if result_text.startswith('```json'):
+                result_text = result_text[7:-3].strip()
+            elif result_text.startswith('```'):
+                result_text = result_text[3:-3].strip()
                 
-            result = json.loads(result_text)
+            try:
+                result = json.loads(result_text)
+            except json.JSONDecodeError as je:
+                logger.error(f"JSON decode error: {je}. Response text: '{result_text}'")
+                return self._fallback_classification(content)
             
             return ClassificationResult(
                 message_type=result.get("message_type", "note"),

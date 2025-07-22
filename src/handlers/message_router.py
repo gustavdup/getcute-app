@@ -1,16 +1,28 @@
 """
 Message router for directing different types of messages to appropriate handlers.
+Now uses simplified workflow with /bd brain dump sessions and no tag prompting.
 """
 import logging
-from typing import Dict, Any, Optional
-from models.message_types import ProcessedMessage, ClassificationResult
-from models.database import User, Message, MessageType, SourceType
-from services.supabase_service import SupabaseService
-from services.whatsapp_service import WhatsAppService
-from ai.message_classifier import MessageClassifier
-from workflows.brain_dump import BrainDumpWorkflow
-from workflows.tagging import TaggingWorkflow
-from handlers.slash_commands import SlashCommandHandler
+import os
+from typing import Dict, Any, Optional, List
+from datetime import datetime, timezone
+from dotenv import load_dotenv
+
+# Ensure environment variables are loaded
+load_dotenv()
+
+from src.models.message_types import ProcessedMessage, ClassificationResult
+from src.models.database import User, Message, MessageType, SourceType, SessionStatus
+from src.services.supabase_service import SupabaseService
+from src.services.whatsapp_service import WhatsAppService
+from src.ai.message_classifier import MessageClassifier
+from src.workflows.brain_dump import BrainDumpWorkflow
+from src.workflows.tagging import TaggingWorkflow
+from src.handlers.slash_commands import SlashCommandHandler
+from src.handlers.message_handlers import BaseHandler, BirthdayHandler, NoteHandler, ReminderHandler
+from src.utils.logger import MessageProcessingLogger
+from src.services.media_processing_service import MediaProcessingService
+from src.services.file_storage_service import FileStorageService
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +32,7 @@ class MessageRouter:
     
     def __init__(self, whatsapp_service=None):
         self.db_service = SupabaseService()
+        self.msg_logger = MessageProcessingLogger()
         
         # Use provided WhatsApp service or create new one with database connection
         if whatsapp_service:
@@ -29,7 +42,18 @@ class MessageRouter:
             
         self.classifier = MessageClassifier()
         
-        # Initialize workflows with the shared WhatsApp service
+        # Initialize message handlers directly (pass classifier for OpenAI access)
+        self.handlers: List[BaseHandler] = [
+            BirthdayHandler(self.db_service, self.whatsapp_service, self.classifier),
+            ReminderHandler(self.db_service, self.whatsapp_service, self.classifier),
+            NoteHandler(self.db_service, self.whatsapp_service, self.classifier),  # Note handler should be last as fallback
+        ]
+        
+        # Initialize media processing services
+        self.media_processor = MediaProcessingService()
+        self.file_storage = FileStorageService()
+        
+        # Initialize legacy workflows for backwards compatibility
         self.brain_dump = BrainDumpWorkflow()
         self.tagging = TaggingWorkflow()
         self.slash_handler = SlashCommandHandler()
@@ -38,184 +62,103 @@ class MessageRouter:
         self.brain_dump.whatsapp_service = self.whatsapp_service
         self.tagging.whatsapp_service = self.whatsapp_service
         self.slash_handler.whatsapp_service = self.whatsapp_service
-    
+
     async def route_message(self, message: ProcessedMessage):
-        """Main routing logic for incoming messages."""
+        """Simplified routing logic - no tag prompting, just process messages."""
+        
+        # Create message data for logging
+        message_data = {
+            "message_id": message.message_id,
+            "user_phone": message.user_phone,
+            "content": message.content,
+            "message_type": message.message_type,
+            "media_id": message.media_id
+        }
+        
         try:
-            # Get or create user
-            user = await self.db_service.get_or_create_user(message.user_phone)
-            logger.info(f"Processing message from user {user.id}: {message.content[:50]}...")
+            self.msg_logger.log_message_stage("MESSAGE_RECEIVED", message_data)
             
-            # Ensure user has an ID
-            if not user.id:
-                logger.error("User ID is None after creation")
-                await self.whatsapp_service.send_text_message(
-                    message.user_phone,
-                    "Sorry, there was an issue with your account. Please try again."
-                )
+            # Get or create user
+            self.msg_logger.log_message_stage("USER_LOOKUP", message_data)
+            user, is_new_user = await self.db_service.get_or_create_user(message.user_phone)
+            
+            if user and user.id:
+                self.msg_logger.log_success_stage("USER_LOOKUP", message_data, f"User ID: {user.id}")
+                
+                # Send welcome message for new users and exit early (don't process their first message)
+                if is_new_user:
+                    await self._send_welcome_message(message.user_phone, user)
+                    return  # Exit early - don't process the first message as a note
+                    
+            else:
+                self.msg_logger.log_error_stage("USER_VALIDATION", Exception("User ID is None"), message_data)
+                return
+            
+            # Check for slash commands first
+            if message.content and message.content.startswith('/'):
+                await self._handle_slash_commands(message, user)
                 return
             
             # Check for active brain dump session
+            self.msg_logger.log_message_stage("SESSION_CHECK", message_data)
             active_session = await self.db_service.get_active_session(user.id)
-            if active_session and not message.content.startswith('/'):
-                await self.brain_dump.handle_session_message(user, message, active_session)
+            
+            # Handle media messages (images, voice notes, documents)
+            if message.media_id and message.message_type in ['image', 'audio', 'document']:
+                self.msg_logger.log_message_stage("MEDIA_PROCESSING", message_data)
+                await self._handle_media_message(message, user, active_session)
                 return
             
-            # Check if this might be a tag response to a previous message
-            if self.tagging.is_tag_response(message.content):
-                tag_handled = await self.tagging.handle_tag_response(user, message.content, message.message_id)
-                if tag_handled:
-                    # Successfully handled as tag response, don't process further
-                    return
-            
-            # Classify the message
-            classification = await self.classifier.classify_message(
-                message.content,
-                await self._get_user_context(user)
-            )
-            
-            logger.info(f"Message classified as: {classification.message_type} (confidence: {classification.confidence})")
-            
-            # Route based on classification
-            await self._route_by_classification(user, message, classification)
-            
-        except Exception as e:
-            logger.error(f"Error routing message: {e}")
-            # Send error message to user
-            await self.whatsapp_service.send_text_message(
-                message.user_phone,
-                "Sorry, I encountered an error processing your message. Please try again."
-            )
-    
-    async def _route_by_classification(
-        self, 
-        user: User, 
-        message: ProcessedMessage, 
-        classification: ClassificationResult
-    ):
-        """Route message based on AI classification."""
-        try:
-            if classification.message_type == "slash_command":
-                await self.slash_handler.handle_command(user, message, classification)
-            
-            elif classification.message_type == "brain_dump_start":
-                await self.brain_dump.start_session(user, message, classification)
-            
-            elif classification.message_type == "note":
-                await self._handle_note(user, message, classification)
-            
-            elif classification.message_type == "reminder":
-                await self._handle_reminder(user, message, classification)
-            
-            elif classification.message_type == "birthday":
-                await self._handle_birthday(user, message, classification)
-            
-            else:
-                # Default to note
-                await self._handle_note(user, message, classification)
-                
-        except Exception as e:
-            logger.error(f"Error in classification routing: {e}")
-            await self.whatsapp_service.send_text_message(
-                message.user_phone,
-                "I couldn't process that message. Try rephrasing or use /help for guidance."
-            )
-    
-    async def _handle_note(self, user: User, message: ProcessedMessage, classification: ClassificationResult):
-        """Handle note storage and tagging."""
-        try:
-            # Ensure user has an ID
-            if not user.id:
-                logger.error("User ID is None in _handle_note")
+            if active_session:
+                self.msg_logger.log_message_stage("BRAIN_DUMP_CONTINUATION", message_data,
+                                                {"session_id": str(active_session.id)})
+                await self._handle_brain_dump_message(message, user, active_session)
                 return
             
-            # Create message record
-            note = Message(
-                user_id=user.id,
-                message_timestamp=message.timestamp,
-                type=MessageType.NOTE,
-                content=message.content,
-                tags=classification.suggested_tags or [],
-                source_type=SourceType(message.message_type),
-                origin_message_id=message.message_id,
-                media_url=message.media_url
-            )
+            # For regular messages, classify and process with handlers
+            self.msg_logger.log_message_stage("AI_CLASSIFICATION", message_data)
+            user_context = await self._get_user_context(user)
+            classification = await self.classifier.classify_message(message.content or "", user_context)
             
-            # Save to database
-            saved_note = await self.db_service.save_message(note)
+            classification_data = {
+                "message_type": classification.message_type,
+                "confidence": classification.confidence,
+                "suggested_tags": classification.suggested_tags,
+                "requires_followup": classification.requires_followup
+            }
+            self.msg_logger.log_classification_result(message_data, classification_data)
             
-            # Handle media processing if needed
-            if message.media_id:
-                await self._process_media(saved_note, message.media_id)
+            # Route to appropriate handler using the new system
+            self.msg_logger.log_message_stage("WORKFLOW_ROUTING", message_data,
+                                            {"classified_as": classification.message_type})
             
-            # Handle tagging workflow
-            if classification.requires_followup or not classification.suggested_tags:
-                await self.tagging.prompt_for_tags(user, saved_note, classification.suggested_tags)
-            else:
-                # Confirm note saved with tags
-                tags_text = " ".join([f"#{tag}" for tag in classification.suggested_tags])
-                await self.whatsapp_service.send_text_message(
-                    message.user_phone,
-                    f"✅ Note saved! {tags_text}"
-                )
+            # Use the new handler system
+            result = await self._process_with_handlers(message, user, classification_data)
+            
+            # If no handler processed it, save as a regular note without prompting for tags
+            if not result.get("success"):
+                suggested_tags = classification.suggested_tags or []
+                await self._save_as_regular_note(message, user, suggested_tags)
+            
+            self.msg_logger.log_success_stage("MESSAGE_COMPLETE", message_data, "Message processing completed successfully")
             
         except Exception as e:
-            logger.error(f"Error handling note: {e}")
-            await self.whatsapp_service.send_text_message(
-                message.user_phone,
-                "Failed to save note. Please try again."
-            )
+            self.msg_logger.log_error_stage("MESSAGE_ROUTING", e, message_data)
+            logger.error(f"Error routing message: {e}", exc_info=True)
     
-    async def _handle_reminder(self, user: User, message: ProcessedMessage, classification: ClassificationResult):
-        """Handle reminder creation."""
-        try:
-            # This would involve the reminder parser
-            # For now, send a confirmation
-            await self.whatsapp_service.send_text_message(
-                message.user_phone,
-                "📝 I'll help you set up that reminder! Reminder functionality is being implemented."
-            )
-            
-            # Save as note for now
-            await self._handle_note(user, message, classification)
-            
-        except Exception as e:
-            logger.error(f"Error handling reminder: {e}")
-    
-    async def _handle_birthday(self, user: User, message: ProcessedMessage, classification: ClassificationResult):
-        """Handle birthday storage."""
-        try:
-            # This would involve the birthday parser
-            # For now, send a confirmation
-            await self.whatsapp_service.send_text_message(
-                message.user_phone,
-                "🎂 I'll help you save that birthday! Birthday functionality is being implemented."
-            )
-            
-            # Save as note for now
-            await self._handle_note(user, message, classification)
-            
-        except Exception as e:
-            logger.error(f"Error handling birthday: {e}")
-    
-    async def _process_media(self, message: Message, media_id: str):
-        """Process media files (transcription, image analysis, etc.)."""
-        try:
-            # Download media
-            media_content = await self.whatsapp_service.download_media(media_id)
-            if not media_content:
-                return
-            
-            # This would involve:
-            # 1. Upload to Supabase Storage
-            # 2. Transcribe audio if applicable
-            # 3. Generate image captions if applicable
-            # 4. Update message with processed data
-            
-            logger.info(f"Media processing for message {message.id} - size: {len(media_content)} bytes")
-            
-        except Exception as e:
-            logger.error(f"Error processing media: {e}")
+    async def _process_with_handlers(self, message: ProcessedMessage, user: User, classification: Dict[str, Any]) -> Dict[str, Any]:
+        """Process message using the new handler system."""
+        # Find the first handler that can process this message
+        for handler in self.handlers:
+            if await handler.can_handle(message, user, classification):
+                return await handler.handle(message, user, classification)
+        
+        # If no handler can process the message, return an error
+        return {
+            "success": False,
+            "type": "no_handler_found",
+            "error": f"No handler found for message type: {classification.get('message_type', 'unknown')}"
+        }
     
     async def _get_user_context(self, user: User) -> Dict[str, Any]:
         """Get user context for AI classification."""
@@ -245,3 +188,339 @@ class MessageRouter:
                 "timezone": "UTC",
                 "user_id": "unknown"
             }
+    
+    async def _handle_slash_commands(self, message: ProcessedMessage, user: User):
+        """Handle slash commands with simplified brain dump logic."""
+        command = message.content.lower().strip()
+        
+        if command.startswith('/bd'):
+            await self._start_brain_dump_session(message, user)
+        elif command in ['/cancel', '/end']:
+            await self._end_active_session(message, user)
+        else:
+            # Handle other slash commands with the existing handler
+            dummy_classification = ClassificationResult(
+                message_type="slash_command",
+                confidence=1.0,
+                suggested_tags=[],
+                requires_followup=False,
+                extracted_data={}
+            )
+            await self.slash_handler.handle_command(user, message, dummy_classification)
+    
+    async def _start_brain_dump_session(self, message: ProcessedMessage, user: User):
+        """Start a new brain dump session with /bd command."""
+        try:
+            if not user.id:
+                logger.error("User ID is None - cannot start brain dump session")
+                return
+                
+            # End any existing active session first
+            existing_session = await self.db_service.get_active_session(user.id)
+            if existing_session and existing_session.id:
+                await self.db_service.end_session(existing_session.id, SessionStatus.CANCELLED)
+            
+            # Extract tags from the /bd command (e.g., "/bd #work #ideas")
+            tags = []
+            if len(message.content.strip()) > 3:  # More than just "/bd"
+                import re
+                hashtag_pattern = r'#(\w+)'
+                tags = re.findall(hashtag_pattern, message.content)
+            
+            # Create new brain dump session
+            session = await self.db_service.create_session(
+                user_id=user.id,
+                session_type="brain_dump",
+                tags=tags
+            )
+            
+            if session:
+                response = "🧠 Brain dump session started!"
+                if tags:
+                    response += f" Tags: {', '.join(['#' + tag for tag in tags])}"
+                response += "\n\nSend your thoughts and I'll collect them. Type /end or /cancel when done."
+                
+                await self.whatsapp_service.send_text_message(message.user_phone, response)
+                self.msg_logger.log_success_stage("BRAIN_DUMP_STARTED", 
+                                                {"message_id": message.message_id, "user_phone": message.user_phone},
+                                                f"Session ID: {session.id}")
+            else:
+                await self.whatsapp_service.send_text_message(
+                    message.user_phone, 
+                    "Sorry, I couldn't start the brain dump session. Please try again."
+                )
+                
+        except Exception as e:
+            self.msg_logger.log_error_stage("BRAIN_DUMP_START_ERROR", e, 
+                                          {"message_id": message.message_id, "user_phone": message.user_phone})
+            await self.whatsapp_service.send_text_message(
+                message.user_phone, 
+                "Sorry, there was an error starting your brain dump session."
+            )
+    
+    async def _end_active_session(self, message: ProcessedMessage, user: User):
+        """End any active brain dump session."""
+        try:
+            if not user.id:
+                logger.error("User ID is None - cannot end brain dump session")
+                return
+                
+            active_session = await self.db_service.get_active_session(user.id)
+            if active_session and active_session.id:
+                await self.db_service.end_session(active_session.id, SessionStatus.COMPLETED)
+                await self.whatsapp_service.send_text_message(
+                    message.user_phone, 
+                    "✅ Brain dump session ended! Your thoughts have been saved."
+                )
+                self.msg_logger.log_success_stage("BRAIN_DUMP_ENDED",
+                                                {"message_id": message.message_id, "user_phone": message.user_phone},
+                                                f"Session ID: {active_session.id}")
+            else:
+                await self.whatsapp_service.send_text_message(
+                    message.user_phone, 
+                    "No active brain dump session to end."
+                )
+        except Exception as e:
+            self.msg_logger.log_error_stage("BRAIN_DUMP_END_ERROR", e,
+                                          {"message_id": message.message_id, "user_phone": message.user_phone})
+    
+    async def _handle_brain_dump_message(self, message: ProcessedMessage, user: User, session):
+        """Handle messages within an active brain dump session."""
+        try:
+            if not user.id:
+                logger.error("User ID is None - cannot save brain dump message")
+                return
+                
+            # Extract any hashtags from the message and add to session tags
+            import re
+            hashtag_pattern = r'#(\w+)'
+            new_tags = re.findall(hashtag_pattern, message.content or "")
+            
+            # Remove hashtags from the message content for cleaner storage
+            clean_content = re.sub(hashtag_pattern, '', message.content or "").strip()
+            
+            # Create bullet point message
+            bullet_content = f"• {clean_content}"
+            
+            # Generate vector embedding for semantic search
+            vector_embedding = await self.media_processor.generate_vector_embedding(bullet_content)
+            
+            # Create message object for this brain dump entry
+            brain_dump_message = Message(
+                user_id=user.id,
+                message_timestamp=datetime.now(timezone.utc),
+                type=MessageType.BRAIN_DUMP,
+                content=bullet_content,
+                tags=new_tags,
+                session_id=session.id,
+                source_type=SourceType.TEXT,
+                origin_message_id=message.message_id,
+                vector_embedding=vector_embedding
+            )
+            
+            # Save the message
+            await self.db_service.save_message(brain_dump_message)
+            
+            # Simple acknowledgment
+            await self.whatsapp_service.send_text_message(message.user_phone, "📝")
+            
+            self.msg_logger.log_success_stage("BRAIN_DUMP_MESSAGE_ADDED",
+                                            {"message_id": message.message_id, "user_phone": message.user_phone},
+                                            f"Session: {session.id}, Tags: {new_tags}")
+            
+        except Exception as e:
+            self.msg_logger.log_error_stage("BRAIN_DUMP_MESSAGE_ERROR", e,
+                                          {"message_id": message.message_id, "user_phone": message.user_phone})
+    
+    async def _handle_media_message(self, message: ProcessedMessage, user: User, active_session=None):
+        """Handle media messages (images, voice notes, documents)."""
+        error_sent = False  # Flag to prevent double error messages
+        
+        try:
+            if not user.id:
+                logger.error("User ID is None - cannot handle media message")
+                return
+            
+            if not message.media_id:
+                logger.error("Media ID is None - cannot process media message")
+                await self.whatsapp_service.send_text_message(
+                    message.user_phone, 
+                    "Sorry, I couldn't process your media file - no media ID found."
+                )
+                error_sent = True
+                return
+            
+            # Get WhatsApp access token - try multiple approaches to ensure we get it
+            access_token = None
+            
+            # Method 1: Direct environment access (now with explicit .env loading)
+            access_token = os.getenv("WHATSAPP_ACCESS_TOKEN")
+            
+            # Method 2: If direct access fails, try token manager
+            if not access_token:
+                try:
+                    from src.services.whatsapp_token_manager import WhatsAppTokenManager
+                    token_manager = WhatsAppTokenManager()
+                    token_status = await token_manager.validate_token()
+                    if token_status.get("valid"):
+                        access_token = token_manager.current_token
+                except Exception as token_error:
+                    logger.error(f"Token manager error: {token_error}")
+            
+            # Method 3: If still no token, try settings
+            if not access_token:
+                try:
+                    from src.config.settings import settings
+                    access_token = settings.whatsapp_access_token
+                except Exception as settings_error:
+                    logger.error(f"Settings access error: {settings_error}")
+            
+            if not access_token:
+                logger.error("WhatsApp access token not available through any method")
+                await self.whatsapp_service.send_text_message(
+                    message.user_phone, 
+                    "Sorry, I couldn't process your media file - service temporarily unavailable."
+                )
+                error_sent = True
+                return
+            
+            # Process the media file
+            filename = f"{message.message_type}_{message.message_id}"
+            processed_message = await self.media_processor.process_media_message(
+                user_id=user.id,
+                media_id=message.media_id,
+                filename=filename,
+                access_token=access_token,
+                caption=message.content
+            )
+            
+            # Extract tags from caption if provided
+            if message.content:
+                import re
+                hashtag_pattern = r'#(\w+)'
+                tags = re.findall(hashtag_pattern, message.content)
+                processed_message.tags = tags
+            
+            # If in brain dump session, associate with session
+            if active_session:
+                processed_message.session_id = active_session.id
+                processed_message.type = MessageType.BRAIN_DUMP
+                processed_message.origin_message_id = message.message_id
+            
+            # Save the processed message
+            saved_message = await self.db_service.save_message(processed_message)
+            
+            # Associate the file with the saved message if we have a file_id
+            if saved_message and saved_message.id:
+                file_id = None
+                if processed_message.metadata and isinstance(processed_message.metadata, dict):
+                    file_id = processed_message.metadata.get("file_id")
+                
+                if file_id:
+                    try:
+                        from uuid import UUID
+                        file_uuid = UUID(file_id)
+                        await self.media_processor.update_file_message_association(file_uuid, saved_message.id)
+                        logger.info(f"Associated file {file_id} with message {saved_message.id}")
+                    except Exception as assoc_error:
+                        logger.warning(f"Failed to associate file with message: {assoc_error}")
+            
+            # Send confirmation
+            if saved_message:
+                response = "✅ Media received"
+                if processed_message.transcription:
+                    response += f" and transcribed: {processed_message.transcription[:100]}..."
+                if processed_message.tags:
+                    response += f" | Tags: {', '.join(['#' + tag for tag in processed_message.tags])}"
+                
+                await self.whatsapp_service.send_text_message(message.user_phone, response)
+                
+                self.msg_logger.log_success_stage("MEDIA_PROCESSED",
+                                                {"message_id": message.message_id, "user_phone": message.user_phone},
+                                                f"Media type: {message.message_type}, File saved: {processed_message.media_url}")
+            
+        except Exception as e:
+            self.msg_logger.log_error_stage("MEDIA_PROCESSING_ERROR", e,
+                                          {"message_id": message.message_id, "user_phone": message.user_phone})
+            
+            # Only send error message if we haven't sent one already
+            if not error_sent:
+                error_msg = "Sorry, I couldn't process your media file."
+                
+                # Provide more specific error message for token issues
+                if "token" in str(e).lower() or "403" in str(e) or "401" in str(e):
+                    error_msg = "Sorry, I couldn't process your media file - authentication issue. The admin has been notified."
+                elif "timeout" in str(e).lower():
+                    error_msg = "Sorry, your media file took too long to process. Please try again with a smaller file."
+                
+                await self.whatsapp_service.send_text_message(message.user_phone, error_msg)
+
+    async def _save_as_regular_note(self, message: ProcessedMessage, user: User, suggested_tags: List[str]):
+        """Save a regular message as a note without prompting for tags."""
+        try:
+            if not user.id:
+                logger.error("User ID is None - cannot save regular note")
+                return
+                
+            # Extract any hashtags from the message
+            import re
+            hashtag_pattern = r'#(\w+)'
+            message_tags = re.findall(hashtag_pattern, message.content or "")
+            
+            # Combine extracted tags with AI suggested tags
+            all_tags = list(set(message_tags + suggested_tags))
+            
+            # Generate vector embedding for semantic search
+            vector_embedding = await self.media_processor.generate_vector_embedding(message.content or "")
+            
+            # Create message object
+            note_message = Message(
+                user_id=user.id,
+                message_timestamp=datetime.now(timezone.utc),
+                type=MessageType.NOTE,
+                content=message.content or "",
+                tags=all_tags,
+                source_type=SourceType.TEXT,
+                origin_message_id=message.message_id,
+                vector_embedding=vector_embedding
+            )
+            
+            # Save the message as a regular note
+            saved_message = await self.db_service.save_message(note_message)
+            
+            if saved_message:
+                # Simple acknowledgment without tag prompting
+                response = "✅"
+                if all_tags:
+                    response += f" Tagged: {', '.join(['#' + tag for tag in all_tags])}"
+                
+                await self.whatsapp_service.send_text_message(message.user_phone, response)
+                
+                self.msg_logger.log_success_stage("REGULAR_NOTE_SAVED",
+                                                {"message_id": message.message_id, "user_phone": message.user_phone},
+                                                f"Note ID: {saved_message.id}, Tags: {all_tags}")
+                                                
+        except Exception as e:
+            self.msg_logger.log_error_stage("REGULAR_NOTE_ERROR", e,
+                                          {"message_id": message.message_id, "user_phone": message.user_phone})
+
+    async def _send_welcome_message(self, user_phone: str, user) -> None:
+        """Send a welcome message to new users."""
+        try:
+            welcome_message = f"""🤖 **Welcome to GetCute!** 
+
+Hi there! I'm your ADHD-friendly personal productivity assistant. I'm here to help you capture thoughts, set reminders, and stay organized without the overwhelm.
+"""
+
+            await self.whatsapp_service.send_text_message(user_phone, welcome_message)
+            
+            # Log the welcome message
+            self.msg_logger.log_success_stage("WELCOME_MESSAGE_SENT", 
+                                            {"user_phone": user_phone, "user_id": str(user.id)},
+                                            "Welcome message sent to new user - first message not processed")
+            
+        except Exception as e:
+            self.msg_logger.log_error_stage("WELCOME_MESSAGE_ERROR", e, 
+                                          {"user_phone": user_phone, "user_id": str(user.id)})
+        
+    

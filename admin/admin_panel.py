@@ -133,6 +133,16 @@ async def get_token_status():
 async def refresh_whatsapp_token():
     """Attempt to refresh the WhatsApp access token."""
     try:
+        # First check if token is valid
+        validation = await token_manager.validate_token()
+        if not validation.get("valid", False):
+            return {
+                "success": False,
+                "message": "Cannot refresh expired token. Please get a new token from Facebook Console.",
+                "error": validation.get("error"),
+                "instructions": "1. Go to https://developers.facebook.com/apps\n2. Select your app > WhatsApp > API Setup\n3. Generate new Access Token\n4. Update WHATSAPP_ACCESS_TOKEN in .env file\n5. Restart the server"
+            }
+        
         new_token = await token_manager.get_long_lived_token()
         if new_token:
             return {
@@ -143,7 +153,9 @@ async def refresh_whatsapp_token():
         else:
             return {
                 "success": False,
-                "message": "Failed to refresh token. Check app credentials or manually renew the token."
+                "message": "Failed to refresh token. Check app credentials or manually renew the token.",
+                "app_id_configured": bool(token_manager.app_id),
+                "app_secret_configured": bool(token_manager.app_secret)
             }
     except Exception as e:
         logger.error(f"Error refreshing token: {e}")

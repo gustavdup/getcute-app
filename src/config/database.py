@@ -4,7 +4,7 @@ Database connection and configuration for Supabase.
 import logging
 from typing import Optional
 from supabase import create_client, Client
-from config.settings import settings
+from src.config.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +54,7 @@ class DatabaseManager:
             # Check if vector search is available by testing a simple query
             logger.info("Checking vector search availability...")
             result = self.client.table("messages").select("id").limit(1).execute()
-            logger.info("✅ Database connection verified")
+            logger.info("Database connection verified successfully")
             
             # Try to check if pgvector functions are available
             try:
@@ -63,9 +63,9 @@ class DatabaseManager:
                     'query_embedding': [0.0] * 1536,
                     'match_count': 1
                 }).execute()
-                logger.info("✅ Vector search functions available")
+                logger.info("Vector search functions available")
             except Exception as ve:
-                logger.info("ℹ️  Vector search functions not available (run additional_analytics.sql for enhanced features)")
+                logger.info("Vector search functions not available (run additional_analytics.sql for enhanced features)")
                 logger.debug(f"Vector function check: {ve}")
             
             return True

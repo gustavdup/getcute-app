@@ -5,18 +5,20 @@ import logging
 import json
 from typing import Dict, Any, Optional, List
 import httpx
-from datetime import datetime
-from config.settings import settings
-from services.whatsapp_token_manager import token_manager
-from models.database import Message, MessageType, SourceType
-from models.message_types import (
+from datetime import datetime, timezone
+from src.config.settings import settings
+from src.services.whatsapp_token_manager import token_manager
+from src.models.database import Message, MessageType, SourceType
+from src.models.message_types import (
     WhatsAppTextMessage, WhatsAppInteractiveMessage,
     WhatsAppInteractive, WhatsAppInteractiveBody,
     WhatsAppInteractiveAction, WhatsAppInteractiveButton,
     WhatsAppInteractiveHeader
 )
+from src.utils.logger import get_message_logger
 
 logger = logging.getLogger(__name__)
+msg_logger = get_message_logger()
 
 
 class WhatsAppService:
@@ -37,12 +39,12 @@ class WhatsAppService:
             
         try:
             # Get or create user from phone number
-            user = await self.db_service.get_or_create_user(user_phone)
+            user, is_new_user = await self.db_service.get_or_create_user(user_phone)
             
             # Create outgoing message record
             outgoing_message = Message(
                 user_id=user.id,
-                message_timestamp=datetime.now(),
+                message_timestamp=datetime.now(timezone.utc),
                 type=MessageType.NOTE,  # Bot responses are generally notes/responses
                 content=f"🤖 {message_content}",  # Prefix with robot emoji to indicate bot response
                 source_type=SourceType.TEXT,
@@ -162,6 +164,9 @@ class WhatsAppService:
     async def download_media(self, media_id: str) -> Optional[bytes]:
         """Download media file from WhatsApp."""
         try:
+            logger.info(f"Downloading WhatsApp media: {media_id}")
+            msg_logger.log_media_processing("download", media_id, "unknown", "WHATSAPP_MEDIA_DOWNLOAD_START")
+            
             headers = await self._get_headers()
             
             # First, get the media URL
@@ -173,6 +178,8 @@ class WhatsAppService:
                 
                 if response.status_code != 200:
                     logger.error(f"Failed to get media URL: {response.text}")
+                    msg_logger.log_media_processing("download", media_id, "unknown", "WHATSAPP_MEDIA_URL_ERROR", 
+                                                  success=False, error=f"Status {response.status_code}: {response.text}")
                     return None
                 
                 media_data = response.json()
@@ -180,7 +187,11 @@ class WhatsAppService:
                 
                 if not media_url:
                     logger.error("No URL found in media response")
+                    msg_logger.log_media_processing("download", media_id, "unknown", "WHATSAPP_MEDIA_URL_MISSING", 
+                                                  success=False, error="No URL in response")
                     return None
+                
+                logger.info(f"Got media URL for {media_id}, downloading content...")
                 
                 # Download the media
                 media_response = await client.get(
@@ -189,13 +200,21 @@ class WhatsAppService:
                 )
                 
                 if media_response.status_code == 200:
+                    content_size = len(media_response.content)
+                    logger.info(f"Successfully downloaded media {media_id}: {content_size} bytes")
+                    msg_logger.log_media_processing("download", media_id, "unknown", "WHATSAPP_MEDIA_DOWNLOAD_SUCCESS", 
+                                                  file_info={"size_bytes": content_size})
                     return media_response.content
                 else:
                     logger.error(f"Failed to download media: {media_response.text}")
+                    msg_logger.log_media_processing("download", media_id, "unknown", "WHATSAPP_MEDIA_DOWNLOAD_ERROR", 
+                                                  success=False, error=f"Status {media_response.status_code}: {media_response.text}")
                     return None
                     
         except Exception as e:
             logger.error(f"Error downloading WhatsApp media: {e}")
+            msg_logger.log_media_processing("download", media_id, "unknown", "WHATSAPP_MEDIA_EXCEPTION", 
+                                          success=False, error=str(e))
             return None
     
     def verify_webhook(self, token: str, challenge: str) -> Optional[str]:

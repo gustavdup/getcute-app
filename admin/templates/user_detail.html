@@ -548,7 +548,11 @@
                         <div class="media-icon">🎤</div>
                         <div class="media-info">
                             <div class="media-filename">Voice Note</div>
-                            <div class="media-details">{{ media.get('message_timestamp', media.get('created_at', 'Unknown date')) }}</div>
+                            <div class="media-details">
+                                <span class="timestamp" data-timestamp="{{ media.get('message_timestamp', media.get('created_at', '')) }}">
+                                    {{ media.get('message_timestamp', media.get('created_at', 'Unknown date')) }}
+                                </span>
+                            </div>
                         </div>
                         {% if media.get('tags') %}
                         <div class="message-tags">
@@ -563,8 +567,37 @@
                     <div class="message-item media-item">
                         <div class="media-icon">📷</div>
                         <div class="media-info">
-                            <div class="media-filename">Image</div>
-                            <div class="media-details">{{ media.get('message_timestamp', media.get('created_at', 'Unknown date')) }}</div>
+                            <div class="media-filename">
+                                {% if media.get('file_info') and media.file_info.get('original_filename') %}
+                                    {{ media.file_info.original_filename }}
+                                {% elif media.get('metadata') and media.metadata.get('original_filename') %}
+                                    {{ media.metadata.original_filename }}
+                                {% else %}
+                                    Image
+                                {% endif %}
+                            </div>
+                            <div class="media-details">
+                                <span class="timestamp" data-timestamp="{{ media.get('message_timestamp', media.get('created_at', '')) }}">
+                                    {{ media.get('message_timestamp', media.get('created_at', 'Unknown date')) }}
+                                </span>
+                            </div>
+                            {% if media.get('media_url') %}
+                                <div class="media-preview">
+                                    <a href="{{ media.media_url }}" target="_blank">
+                                        <img src="{{ media.media_url }}" alt="Image" style="max-width: 200px; max-height: 150px; border-radius: 8px; margin-top: 10px;">
+                                    </a>
+                                </div>
+                            {% elif media.get('file_info') and media.file_info.get('public_url') %}
+                                <div class="media-preview">
+                                    <a href="{{ media.file_info.public_url }}" target="_blank">
+                                        <img src="{{ media.file_info.public_url }}" alt="Image" style="max-width: 200px; max-height: 150px; border-radius: 8px; margin-top: 10px;">
+                                    </a>
+                                </div>
+                            {% else %}
+                                <div class="media-link">
+                                    <em>Image file (preview not available)</em>
+                                </div>
+                            {% endif %}
                         </div>
                         {% if media.get('tags') %}
                         <div class="message-tags">
@@ -589,10 +622,15 @@
                     {% for reminder in organized_data.reminders %}
                     <div class="message-item reminder-item">
                         <div class="message-meta">
-                            <span>⏰ {{ reminder.get('reminder_time', 'No time set') }}</span>
+                            <span>⏰ {{ reminder.get('trigger_time', 'No time set') }}</span>
                             <span>{{ 'Active' if reminder.get('is_active', False) else 'Completed' }}</span>
                         </div>
-                        <div class="message-content">{{ reminder.get('content', 'No content') }}</div>
+                        <div class="message-content">
+                            <strong>{{ reminder.get('title', 'No title') }}</strong>
+                            {% if reminder.get('description') %}
+                            <p>{{ reminder.get('description') }}</p>
+                            {% endif %}
+                        </div>
                         {% if reminder.get('tags') %}
                         <div class="message-tags">
                             {% for tag in reminder.get('tags', []) %}
@@ -617,7 +655,9 @@
                     <div class="message-item birthday-item">
                         <div class="message-meta">
                             <span>🎂 {{ birthday.get('person_name', 'Unknown person') }}</span>
-                            <span>{{ birthday.get('birth_date', 'No date set') }}</span>
+                            <span class="birthday-date" data-date="{{ birthday.get('birthdate', '') }}">
+                                {{ birthday.get('birthdate', 'No date set') }}
+                            </span>
                         </div>
                         {% if birthday.get('notification_settings') %}
                         <div class="message-content">
@@ -692,6 +732,61 @@
             }
         }
 
+        // Helper function to format timestamp with better timezone handling
+        function formatMessageDate(timestamp) {
+            if (!timestamp) return 'Unknown date';
+            
+            try {
+                let date;
+                
+                // If it's already a Date object
+                if (timestamp instanceof Date) {
+                    date = timestamp;
+                }
+                // If it's a Unix timestamp (number)
+                else if (typeof timestamp === 'number') {
+                    date = new Date(timestamp * 1000);
+                }
+                // If it's a string
+                else {
+                    // Handle various timestamp formats
+                    let cleanTimestamp = timestamp;
+                    
+                    // If timestamp doesn't have timezone info, assume UTC
+                    if (typeof cleanTimestamp === 'string') {
+                        // If it doesn't end with Z or timezone offset, assume it's UTC
+                        if (!cleanTimestamp.match(/[Zz]$/) && !cleanTimestamp.match(/[+-]\d{2}:\d{2}$/)) {
+                            cleanTimestamp += '+00:00';
+                        }
+                    }
+                    
+                    date = new Date(cleanTimestamp);
+                }
+                
+                // Check if date is valid
+                if (isNaN(date.getTime())) {
+                    console.warn('Invalid date:', timestamp);
+                    return 'Invalid date';
+                }
+                
+                // Always format in user's local timezone
+                const options = {
+                    year: 'numeric',
+                    month: 'short', 
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    hour12: false
+                };
+                
+                return date.toLocaleString('en-US', options);
+                
+            } catch (error) {
+                console.error('Error formatting date:', error, 'Timestamp:', timestamp);
+                return 'Invalid date';
+            }
+        }
+
         function displayConversation(messages) {
             const content = document.getElementById('timelineContent');
             
@@ -702,14 +797,32 @@
 
             // Sort messages by timestamp (newest first)
             messages.sort((a, b) => {
-                const dateA = new Date(a.timestamp || a.message_timestamp || a.created_at || 0);
-                const dateB = new Date(b.timestamp || b.message_timestamp || b.created_at || 0);
-                return dateB - dateA; // Descending order (newest first)
+                const timestampA = a.timestamp || a.message_timestamp || a.created_at;
+                const timestampB = b.timestamp || b.message_timestamp || b.created_at;
+                
+                if (!timestampA && !timestampB) return 0;
+                if (!timestampA) return 1;
+                if (!timestampB) return -1;
+                
+                try {
+                    const dateA = new Date(timestampA);
+                    const dateB = new Date(timestampB);
+                    
+                    // Check for invalid dates
+                    if (isNaN(dateA.getTime()) && isNaN(dateB.getTime())) return 0;
+                    if (isNaN(dateA.getTime())) return 1;
+                    if (isNaN(dateB.getTime())) return -1;
+                    
+                    return dateB - dateA; // Descending order (newest first)
+                } catch (error) {
+                    console.error('Error sorting dates:', error, timestampA, timestampB);
+                    return 0;
+                }
             });
 
             let html = '';
             messages.forEach(message => {
-                const date = new Date(message.timestamp || message.message_timestamp || message.created_at).toLocaleString();
+                const date = formatMessageDate(message.timestamp || message.message_timestamp || message.created_at);
                 let icon = '👤';
                 let bubbleClass = 'user';
                 let timelineClass = 'user-message';
@@ -745,11 +858,37 @@
                 const cleanContent = isBotResponse && messageContent.startsWith('🤖') ? 
                     messageContent.substring(2).trim() : messageContent;
 
+                // Handle media content
+                let mediaHtml = '';
+                if (message.media_url) {
+                    if (message.source_type === 'image') {
+                        mediaHtml = `<div class="message-media">
+                            <a href="${message.media_url}" target="_blank">
+                                <img src="${message.media_url}" alt="Image" style="max-width: 250px; max-height: 200px; border-radius: 8px; margin-top: 8px; cursor: pointer;">
+                            </a>
+                        </div>`;
+                    } else if (message.source_type === 'audio') {
+                        mediaHtml = `<div class="message-media">
+                            <audio controls style="margin-top: 8px;">
+                                <source src="${message.media_url}" type="audio/mpeg">
+                                Your browser does not support the audio element.
+                            </audio>
+                        </div>`;
+                    } else if (message.source_type === 'document') {
+                        mediaHtml = `<div class="message-media">
+                            <a href="${message.media_url}" target="_blank" style="display: inline-block; margin-top: 8px; padding: 8px 12px; background: rgba(255,255,255,0.1); border-radius: 6px; text-decoration: none; color: inherit;">
+                                📄 View Document
+                            </a>
+                        </div>`;
+                    }
+                }
+
                 html += `
                     <div class="timeline-item ${timelineClass}">
                         <div class="message-avatar ${avatarClass}">${icon}</div>
                         <div class="message-bubble ${bubbleClass}">
                             <div class="message-content-text">${cleanContent}</div>
+                            ${mediaHtml}
                             <div class="message-meta-chat">${date}</div>
                         </div>
                     </div>
@@ -898,7 +1037,43 @@
                     performSearch();
                 }
             });
+
+            // Format all timestamps on page load
+            formatPageTimestamps();
+            
+            // Format birthday dates to show only day/month
+            formatBirthdayDates();
         });
+
+        function formatPageTimestamps() {
+            // Format all timestamps with data-timestamp attribute
+            const timestampElements = document.querySelectorAll('.timestamp[data-timestamp]');
+            timestampElements.forEach(function(element) {
+                const timestamp = element.getAttribute('data-timestamp');
+                if (timestamp) {
+                    const formatted = formatMessageDate(timestamp);
+                    element.textContent = formatted;
+                }
+            });
+        }
+
+        function formatBirthdayDates() {
+            const birthdayDates = document.querySelectorAll('.birthday-date[data-date]');
+            birthdayDates.forEach(function(dateElement) {
+                const dateStr = dateElement.getAttribute('data-date');
+                if (dateStr && dateStr !== '' && dateStr !== 'No date set') {
+                    try {
+                        const date = new Date(dateStr);
+                        const monthNames = ["January", "February", "March", "April", "May", "June",
+                            "July", "August", "September", "October", "November", "December"];
+                        const formattedDate = monthNames[date.getMonth()] + ' ' + date.getDate();
+                        dateElement.textContent = formattedDate;
+                    } catch (e) {
+                        console.log('Error formatting date:', dateStr, e);
+                    }
+                }
+            });
+        }
     </script>
 </body>
 </html>

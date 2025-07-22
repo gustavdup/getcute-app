@@ -42,6 +42,31 @@ class RepeatType(str, Enum):
     YEARLY = "yearly"
 
 
+class FileType(str, Enum):
+    """File types for uploaded media."""
+    IMAGE = "image"
+    AUDIO = "audio"
+    DOCUMENT = "document"
+    VIDEO = "video"
+
+
+class UploadStatus(str, Enum):
+    """Upload status for files."""
+    UPLOADING = "uploading"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    DELETED = "deleted"
+
+
+class TranscriptionStatus(str, Enum):
+    """Transcription status for audio/video files."""
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    NOT_APPLICABLE = "not_applicable"
+
+
 # Database Models
 class User(BaseModel):
     """User model for database storage."""
@@ -130,6 +155,34 @@ class Session(BaseModel):
     status: SessionStatus = SessionStatus.ACTIVE
     tags: Optional[List[str]] = []
     metadata: Optional[Dict[str, Any]] = None
+    
+    class Config:
+        json_encoders = {
+            datetime: lambda v: v.isoformat(),
+            UUID: lambda v: str(v)
+        }
+
+
+class File(BaseModel):
+    """File model for media storage tracking."""
+    id: Optional[UUID] = None
+    user_id: UUID
+    message_id: Optional[UUID] = None
+    filename: str  # Generated filename in storage
+    original_filename: str  # Original filename from user
+    file_type: FileType
+    mime_type: str
+    file_size_bytes: int
+    storage_path: str  # Full path in Supabase storage
+    storage_bucket: str = "user-media"
+    upload_status: UploadStatus = UploadStatus.UPLOADING
+    transcription_status: TranscriptionStatus = TranscriptionStatus.PENDING
+    transcription_text: Optional[str] = None
+    duration_seconds: Optional[int] = None  # For audio/video files
+    dimensions: Optional[Dict[str, int]] = None  # For images/videos: {"width": 1920, "height": 1080}
+    metadata: Optional[Dict[str, Any]] = None
+    created_at: Optional[datetime] = None
+    deleted_at: Optional[datetime] = None
     
     class Config:
         json_encoders = {

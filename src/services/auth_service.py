@@ -2,11 +2,11 @@
 Authentication service for SSO and portal access.
 """
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 import jwt
-from config.settings import settings
-from models.database import User
+from src.config.settings import settings
+from src.models.database import User
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +30,8 @@ class AuthService:
                 "user_id": str(user.id),
                 "phone_number": user.phone_number,
                 "redirect_path": redirect_path,
-                "exp": datetime.utcnow() + timedelta(hours=self.token_expire_hours),
-                "iat": datetime.utcnow(),
+                "exp": datetime.now(timezone.utc) + timedelta(hours=self.token_expire_hours),
+                "iat": datetime.now(timezone.utc),
                 "type": "portal_access"
             }
             

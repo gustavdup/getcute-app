@@ -6,7 +6,7 @@ import httpx
 import json
 from typing import Optional, Dict, Any
 from datetime import datetime, timedelta
-from config.settings import settings
+from src.config.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +87,12 @@ class WhatsAppTokenManager:
             return None
             
         try:
+            # First check if current token is completely expired
+            validation = await self.validate_token()
+            if not validation.get("valid", False):
+                logger.error("Cannot refresh completely expired token. Please get a new token from Facebook Console.")
+                return None
+            
             url = "https://graph.facebook.com/oauth/access_token"
             params = {
                 "grant_type": "fb_exchange_token",

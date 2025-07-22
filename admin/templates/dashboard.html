@@ -159,6 +159,88 @@
             padding: 20px;
             color: #666;
         }
+        
+        /* Token Management Styles */
+        .token-management {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 20px;
+        }
+        
+        .token-info {
+            flex: 1;
+            min-width: 300px;
+        }
+        
+        .token-status, .token-expiry {
+            margin-bottom: 10px;
+            font-size: 14px;
+        }
+        
+        .token-status span:first-child, .token-expiry span:first-child {
+            color: #666;
+            font-weight: 500;
+        }
+        
+        .token-actions {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        
+        .action-btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            min-width: 140px;
+        }
+        
+        .refresh-btn {
+            background: #4CAF50;
+            color: white;
+        }
+        
+        .refresh-btn:hover {
+            background: #45a049;
+        }
+        
+        .regenerate-btn {
+            background: #2196F3;
+            color: white;
+        }
+        
+        .regenerate-btn:hover {
+            background: #1976D2;
+        }
+        
+        .action-btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        
+        .token-result {
+            margin-top: 15px;
+            padding: 15px;
+            border-radius: 6px;
+            border-left: 4px solid #2196F3;
+            background: #f3f9ff;
+        }
+        
+        .token-result.success {
+            border-color: #4CAF50;
+            background: #f1f8e9;
+        }
+        
+        .token-result.error {
+            border-color: #f44336;
+            background: #ffebee;
+        }
     </style>
 </head>
 <body>
@@ -250,6 +332,32 @@
         </div>
     </div>
 
+    <!-- Token Management Panel -->
+    <div class="stats-panel">
+        <h2>🔑 Token Management</h2>
+        <div class="token-management">
+            <div class="token-info">
+                <div class="token-status">
+                    <span>Current Token Status: </span>
+                    <span id="detailedTokenStatus">⏳ Checking...</span>
+                </div>
+                <div class="token-expiry">
+                    <span>Expires: </span>
+                    <span id="tokenExpiry">-</span>
+                </div>
+            </div>
+            <div class="token-actions">
+                <button id="refreshTokenBtn" class="action-btn refresh-btn" onclick="refreshToken()">
+                    🔄 Refresh Token
+                </button>
+                <button id="regenerateTokenBtn" class="action-btn regenerate-btn" onclick="showTokenRegenInstructions()">
+                    🎯 Regenerate Token
+                </button>
+            </div>
+        </div>
+        <div id="tokenResult" class="token-result" style="display: none;"></div>
+    </div>
+
     <script>
         // Load dashboard data on page load
         window.onload = function() {
@@ -293,31 +401,93 @@
                 const data = await response.json();
                 
                 const tokenStatusElement = document.getElementById('tokenStatus');
+                const detailedStatusElement = document.getElementById('detailedTokenStatus');
+                const tokenExpiryElement = document.getElementById('tokenExpiry');
                 
                 if (data.validation && data.validation.valid) {
                     const expiresAt = data.status.expires_at;
                     if (data.status.expires_soon) {
                         tokenStatusElement.innerHTML = '⚠️ Expires Soon';
                         tokenStatusElement.style.color = '#f57c00';
+                        detailedStatusElement.innerHTML = '⚠️ Expires Soon';
+                        detailedStatusElement.style.color = '#f57c00';
                     } else {
                         tokenStatusElement.innerHTML = '✅ Valid';
                         tokenStatusElement.style.color = '#4caf50';
+                        detailedStatusElement.innerHTML = '✅ Valid';
+                        detailedStatusElement.style.color = '#4caf50';
                     }
                     
                     if (expiresAt) {
                         const expiryDate = new Date(expiresAt);
                         tokenStatusElement.title = `Expires: ${expiryDate.toLocaleString()}`;
+                        tokenExpiryElement.textContent = expiryDate.toLocaleString();
                     }
                 } else {
                     tokenStatusElement.innerHTML = '❌ Invalid/Expired';
                     tokenStatusElement.style.color = '#f44336';
                     tokenStatusElement.title = 'Token needs renewal - check console for details';
+                    detailedStatusElement.innerHTML = '❌ Invalid/Expired';
+                    detailedStatusElement.style.color = '#f44336';
+                    tokenExpiryElement.textContent = 'Expired';
                 }
                 
             } catch (error) {
                 console.error('Error checking token status:', error);
                 document.getElementById('tokenStatus').innerHTML = '❓ Unknown';
+                document.getElementById('detailedTokenStatus').innerHTML = '❓ Unknown';
             }
+        }
+
+        async function refreshToken() {
+            const btn = document.getElementById('refreshTokenBtn');
+            const result = document.getElementById('tokenResult');
+            
+            btn.disabled = true;
+            btn.textContent = '🔄 Refreshing...';
+            result.style.display = 'block';
+            result.className = 'token-result';
+            result.innerHTML = '⏳ Attempting to refresh token...';
+            
+            try {
+                const response = await fetch('/admin/refresh-token', { method: 'POST' });
+                const data = await response.json();
+                
+                if (data.success) {
+                    result.className = 'token-result success';
+                    result.innerHTML = `✅ Token refreshed successfully!<br>New expiry: ${new Date(data.expires_at).toLocaleString()}`;
+                    // Refresh the token status
+                    setTimeout(() => checkTokenStatus(), 1000);
+                } else {
+                    result.className = 'token-result error';
+                    result.innerHTML = `❌ Failed to refresh token: ${data.error || 'Unknown error'}`;
+                }
+            } catch (error) {
+                result.className = 'token-result error';
+                result.innerHTML = `❌ Error refreshing token: ${error.message}`;
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '🔄 Refresh Token';
+            }
+        }
+
+        function showTokenRegenInstructions() {
+            const result = document.getElementById('tokenResult');
+            result.style.display = 'block';
+            result.className = 'token-result';
+            result.innerHTML = `
+                <h4>🎯 How to Regenerate WhatsApp Token</h4>
+                <ol style="text-align: left; margin: 15px 0;">
+                    <li>Go to <a href="https://developers.facebook.com" target="_blank">Facebook Developers</a></li>
+                    <li>Navigate to your WhatsApp Business app</li>
+                    <li>Go to WhatsApp > API Setup</li>
+                    <li>Click "Generate Access Token" under the phone number</li>
+                    <li>Copy the new token</li>
+                    <li>Update your .env file: <code>WHATSAPP_ACCESS_TOKEN=your_new_token</code></li>
+                    <li>Restart the bot server</li>
+                </ol>
+                <p><strong>Note:</strong> Tokens expire every 24 hours by default. Consider implementing permanent tokens for production.</p>
+            `;
         }
 
         async function refreshData() {

@@ -4,10 +4,10 @@ Tagging workflow for managing tag suggestions and user responses.
 import logging
 from datetime import datetime, timedelta
 from typing import List, Optional
-from models.database import User, Message
-from services.supabase_service import SupabaseService
-from services.whatsapp_service import WhatsAppService
-from ai.message_classifier import MessageClassifier
+from src.models.database import User, Message
+from src.services.supabase_service import SupabaseService
+from src.services.whatsapp_service import WhatsAppService
+from src.ai.message_classifier import MessageClassifier
 
 logger = logging.getLogger(__name__)
 

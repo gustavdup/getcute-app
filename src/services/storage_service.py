@@ -10,8 +10,10 @@ from supabase import Client
 
 from config.settings import settings
 from config.database import get_db_client
+from utils.logger import get_message_logger
 
 logger = logging.getLogger(__name__)
+msg_logger = get_message_logger()
 
 
 class StorageService:
@@ -27,21 +29,38 @@ class StorageService:
         This method ensures the folder structure exists.
         """
         try:
+            logger.info(f"Creating user folder for user {user_id}")
+            msg_logger.log_media_processing("folder", "placeholder", str(user_id), "USER_FOLDER_CREATE_START")
+            
             # Create a placeholder file to ensure folder exists
             placeholder_path = f"user_folders/{user_id}/.placeholder"
             
             # Upload empty placeholder file
             result = self.client.storage.from_(self.bucket_name).upload(
                 path=placeholder_path,
-                file=b"",
+                file=b"# User folder placeholder",
                 file_options={"content-type": "text/plain"}
             )
             
             logger.info(f"Created user folder for user {user_id}")
+            msg_logger.log_media_processing("folder", "placeholder", str(user_id), "USER_FOLDER_CREATE_SUCCESS", 
+                                          file_info={"placeholder_path": placeholder_path})
             return True
             
         except Exception as e:
+            # Check if folder already exists by trying to list contents
+            try:
+                files = self.client.storage.from_(self.bucket_name).list(f"user_folders/{user_id}")
+                if files:
+                    logger.info(f"User folder already exists for user {user_id}")
+                    msg_logger.log_media_processing("folder", "placeholder", str(user_id), "USER_FOLDER_EXISTS")
+                    return True
+            except:
+                pass
+            
             logger.error(f"Error creating user folder for {user_id}: {e}")
+            msg_logger.log_media_processing("folder", "placeholder", str(user_id), "USER_FOLDER_CREATE_ERROR", 
+                                          success=False, error=str(e))
             return False
     
     async def upload_file(
@@ -66,6 +85,10 @@ class StorageService:
             Dict with file information or None if failed
         """
         try:
+            logger.info(f"Uploading file {filename} for user {user_id}")
+            msg_logger.log_media_processing("upload", filename, str(user_id), "FILE_UPLOAD_START", 
+                                          file_info={"filename": filename, "size": len(file_content), "content_type": content_type})
+            
             # Generate storage path
             storage_path = f"user_folders/{user_id}/{filename}"
             
@@ -78,6 +101,8 @@ class StorageService:
                     "cache-control": "3600"
                 }
             )
+            
+            msg_logger.log_media_processing("upload", filename, str(user_id), "FILE_UPLOAD_SUCCESS")
             
             # Get signed URL for private bucket (valid for 1 hour)
             signed_url_response = self.client.storage.from_(self.bucket_name).create_signed_url(
@@ -98,6 +123,8 @@ class StorageService:
             }
             
             logger.info(f"Successfully uploaded file {filename} for user {user_id}")
+            msg_logger.log_media_processing("upload", filename, str(user_id), "FILE_UPLOAD_COMPLETE", 
+                                          file_info=file_info)
             return file_info
             
         except Exception as e:
