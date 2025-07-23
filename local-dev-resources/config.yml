@@ -1,0 +1,7 @@
+tunnel: 998407d4-5a6a-43df-a647-8b1fec059bf1
+credentials-file: C:\Users\gusta\.cloudflared\998407d4-5a6a-43df-a647-8b1fec059bf1.json
+
+ingress:
+  - hostname: dev.getcute.chat
+    service: http://localhost:8000
+  - service: http_status:404

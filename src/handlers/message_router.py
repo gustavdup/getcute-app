@@ -106,16 +106,19 @@ class MessageRouter:
             # Handle media messages (images, voice notes, documents)
             if message.media_id and message.message_type in ['image', 'audio', 'document']:
                 self.msg_logger.log_message_stage("MEDIA_PROCESSING", message_data)
-                await self._handle_media_message(message, user, active_session)
+                
+                # If in brain dump session, handle media as part of the session
+                if active_session:
+                    await self._handle_brain_dump_media_message(message, user, active_session)
+                else:
+                    await self._handle_media_message(message, user, active_session)
                 return
-            
+
             if active_session:
                 self.msg_logger.log_message_stage("BRAIN_DUMP_CONTINUATION", message_data,
                                                 {"session_id": str(active_session.id)})
                 await self._handle_brain_dump_message(message, user, active_session)
-                return
-            
-            # For regular messages, classify and process with handlers
+                return            # For regular messages, classify and process with handlers
             self.msg_logger.log_message_stage("AI_CLASSIFICATION", message_data)
             user_context = await self._get_user_context(user)
             classification = await self.classifier.classify_message(message.content or "", user_context)
@@ -262,7 +265,7 @@ class MessageRouter:
             )
     
     async def _end_active_session(self, message: ProcessedMessage, user: User):
-        """End any active brain dump session."""
+        """End any active brain dump session and create consolidated note."""
         try:
             if not user.id:
                 logger.error("User ID is None - cannot end brain dump session")
@@ -270,14 +273,23 @@ class MessageRouter:
                 
             active_session = await self.db_service.get_active_session(user.id)
             if active_session and active_session.id:
+                # End the session
                 await self.db_service.end_session(active_session.id, SessionStatus.COMPLETED)
-                await self.whatsapp_service.send_text_message(
-                    message.user_phone, 
-                    "✅ Brain dump session ended! Your thoughts have been saved."
+                
+                # Get message count by querying the database for brain dumps with this session ID
+                session_messages = await self.db_service.get_user_messages(
+                    user_id=user.id,
+                    limit=100,
+                    since=active_session.start_time
                 )
+                message_count = len([m for m in session_messages if m.session_id == active_session.id])
+                
+                feedback = f"✅ Brain dump session ended! Saved {message_count} individual thought{'s' if message_count != 1 else ''}."
+                await self.whatsapp_service.send_text_message(message.user_phone, feedback)
+                
                 self.msg_logger.log_success_stage("BRAIN_DUMP_ENDED",
                                                 {"message_id": message.message_id, "user_phone": message.user_phone},
-                                                f"Session ID: {active_session.id}")
+                                                f"Session ID: {active_session.id}, Messages: {message_count}")
             else:
                 await self.whatsapp_service.send_text_message(
                     message.user_phone, 
@@ -288,7 +300,7 @@ class MessageRouter:
                                           {"message_id": message.message_id, "user_phone": message.user_phone})
     
     async def _handle_brain_dump_message(self, message: ProcessedMessage, user: User, session):
-        """Handle messages within an active brain dump session."""
+        """Handle messages within an active brain dump session - save each message individually."""
         try:
             if not user.id:
                 logger.error("User ID is None - cannot save brain dump message")
@@ -302,38 +314,178 @@ class MessageRouter:
             # Remove hashtags from the message content for cleaner storage
             clean_content = re.sub(hashtag_pattern, '', message.content or "").strip()
             
-            # Create bullet point message
-            bullet_content = f"• {clean_content}"
+            # Combine session tags with any new tags found in this message
+            all_tags = list(set((session.tags or []) + new_tags))
             
-            # Generate vector embedding for semantic search
-            vector_embedding = await self.media_processor.generate_vector_embedding(bullet_content)
+            # Generate vector embedding for this individual message
+            vector_embedding = await self.media_processor.generate_vector_embedding(clean_content)
             
-            # Create message object for this brain dump entry
+            # Create individual brain dump message (not consolidated)
             brain_dump_message = Message(
                 user_id=user.id,
                 message_timestamp=datetime.now(timezone.utc),
                 type=MessageType.BRAIN_DUMP,
-                content=bullet_content,
-                tags=new_tags,
-                session_id=session.id,
+                content=clean_content,
+                tags=all_tags,
                 source_type=SourceType.TEXT,
                 origin_message_id=message.message_id,
+                session_id=session.id,  # Link to session
                 vector_embedding=vector_embedding
             )
             
-            # Save the message
-            await self.db_service.save_message(brain_dump_message)
+            # Save the individual message immediately
+            saved_message = await self.db_service.save_message(brain_dump_message)
             
-            # Simple acknowledgment
-            await self.whatsapp_service.send_text_message(message.user_phone, "📝")
+            # Update session tags if we found new ones
+            if new_tags:
+                await self.db_service.update_session_tags(session.id, all_tags)
             
-            self.msg_logger.log_success_stage("BRAIN_DUMP_MESSAGE_ADDED",
+            # Send quick confirmation (emoji only to minimize interruption)
+            await self.whatsapp_service.send_text_message(message.user_phone, "✅")
+            
+            self.msg_logger.log_success_stage("BRAIN_DUMP_MESSAGE_SAVED",
                                             {"message_id": message.message_id, "user_phone": message.user_phone},
-                                            f"Session: {session.id}, Tags: {new_tags}")
+                                            f"Session: {session.id}, Tags: {all_tags}, New tags: {new_tags}")
             
         except Exception as e:
             self.msg_logger.log_error_stage("BRAIN_DUMP_MESSAGE_ERROR", e,
                                           {"message_id": message.message_id, "user_phone": message.user_phone})
+
+    async def _handle_brain_dump_media_message(self, message: ProcessedMessage, user: User, session):
+        """Handle media messages within an active brain dump session - save each media message individually."""
+        try:
+            if not user.id:
+                logger.error("User ID is None - cannot handle brain dump media message")
+                return
+            
+            # Get WhatsApp access token using the same triple-fallback method
+            access_token = None
+            access_token = os.getenv("WHATSAPP_ACCESS_TOKEN")
+            
+            if not access_token:
+                try:
+                    from src.services.whatsapp_token_manager import WhatsAppTokenManager
+                    token_manager = WhatsAppTokenManager()
+                    token_status = await token_manager.validate_token()
+                    if token_status.get("valid"):
+                        access_token = token_manager.current_token
+                except Exception as token_error:
+                    logger.error(f"Token manager error: {token_error}")
+            
+            if not access_token:
+                try:
+                    from src.config.settings import settings
+                    access_token = settings.whatsapp_access_token
+                except Exception as settings_error:
+                    logger.error(f"Settings access error: {settings_error}")
+            
+            if not access_token:
+                self.msg_logger.log_error_stage("BRAIN_DUMP_MEDIA_TOKEN_ERROR", 
+                                              Exception("No WhatsApp access token available"),
+                                              {"message_id": message.message_id})
+                return
+            
+            if not message.media_id:
+                logger.error("No media ID found for brain dump media message")
+                return
+            
+            # Download and process media using the correct method name
+            filename = f"{message.message_type}_{message.message_id}"
+            processed_message = await self.media_processor.process_media_message(
+                user_id=user.id,
+                media_id=message.media_id,
+                filename=filename,
+                access_token=access_token,
+                caption=message.content  # Any caption/text with the media
+            )
+            
+            if not processed_message:
+                logger.error(f"Failed to process media for brain dump session: {message.media_id}")
+                return
+            
+            # Extract meaningful content for the brain dump message
+            media_content = ""
+            media_type = message.message_type  # Use the message type directly
+            
+            if media_type == "audio" and processed_message.transcription:
+                # Voice note transcription
+                media_content = processed_message.transcription
+            elif media_type == "image":
+                # Image description
+                if message.content:  # Caption provided
+                    media_content = f"Image: {message.content}"
+                else:
+                    media_content = "Image shared"
+            elif media_type == "document":
+                # Document reference
+                if message.content:  # Caption provided
+                    media_content = f"Document: {message.content}"
+                else:
+                    media_content = "Document shared"
+            else:
+                # Fallback
+                media_content = message.content or "Media file shared"
+            
+            # Extract tags from media content and caption
+            import re
+            hashtag_pattern = r'#(\w+)'
+            new_tags = re.findall(hashtag_pattern, media_content)
+            
+            # Also extract tags from any caption
+            if message.content:
+                caption_tags = re.findall(hashtag_pattern, message.content)
+                new_tags.extend(caption_tags)
+            
+            # Remove hashtags from content for cleaner storage
+            clean_content = re.sub(hashtag_pattern, '', media_content).strip()
+            
+            # Remove duplicates and combine with session tags
+            new_tags = list(set(new_tags))
+            all_tags = list(set((session.tags or []) + new_tags))
+            
+            # Generate vector embedding for the content
+            vector_embedding = await self.media_processor.generate_vector_embedding(clean_content)
+            
+            # Determine source type based on media type
+            source_type_map = {
+                "audio": SourceType.AUDIO,
+                "image": SourceType.IMAGE, 
+                "document": SourceType.DOCUMENT
+            }
+            source_type = source_type_map.get(media_type, SourceType.TEXT)
+            
+            # Create individual brain dump message
+            brain_dump_message = Message(
+                user_id=user.id,
+                message_timestamp=datetime.now(timezone.utc),
+                type=MessageType.BRAIN_DUMP,
+                content=clean_content,
+                tags=all_tags,
+                source_type=source_type,
+                origin_message_id=message.message_id,
+                session_id=session.id,  # Link to session
+                media_url=processed_message.media_url,
+                vector_embedding=vector_embedding
+            )
+            
+            # Save the individual media message immediately
+            saved_message = await self.db_service.save_message(brain_dump_message)
+            
+            # Update session tags if we found new ones
+            if new_tags:
+                await self.db_service.update_session_tags(session.id, all_tags)
+            
+            # Send quick confirmation (emoji only to minimize interruption)
+            await self.whatsapp_service.send_text_message(message.user_phone, "✅")
+            
+            self.msg_logger.log_success_stage("BRAIN_DUMP_MEDIA_SAVED",
+                                            {"message_id": message.message_id, "user_phone": message.user_phone},
+                                            f"Session: {session.id}, Media type: {media_type}, Tags: {all_tags}")
+            
+        except Exception as e:
+            self.msg_logger.log_error_stage("BRAIN_DUMP_MEDIA_ERROR", e,
+                                          {"message_id": message.message_id, "user_phone": message.user_phone})
+    
     
     async def _handle_media_message(self, message: ProcessedMessage, user: User, active_session=None):
         """Handle media messages (images, voice notes, documents)."""
@@ -514,6 +666,10 @@ class MessageRouter:
                 logger.error("User ID is None - cannot save command message")
                 return
                 
+            # Check if there's an active session to link the command to
+            active_session = await self.db_service.get_active_session(user.id)
+            session_id = active_session.id if active_session else None
+                
             # Create message object for the command
             command_message = Message(
                 user_id=user.id,
@@ -523,6 +679,7 @@ class MessageRouter:
                 tags=[],
                 source_type=SourceType.TEXT,
                 origin_message_id=message.message_id,
+                session_id=session_id,  # Link to active session if exists
                 vector_embedding=None
             )
             

@@ -22,21 +22,30 @@ os.environ['PYTHONPATH'] = str(src_path)
 def start_cloudflare_tunnel():
     """Start Cloudflare tunnel in a separate process."""
     try:
-        cloudflared_path = project_root / "cloudflared.exe"
+        # Use local-dev-resources folder for Cloudflare files
+        local_dev_path = project_root / "local-dev-resources"
+        cloudflared_path = local_dev_path / "cloudflared.exe"
         if not cloudflared_path.exists():
-            print("❌ cloudflared.exe not found. Please download it first.")
+            print("❌ cloudflared.exe not found in local-dev-resources/. Please download it first.")
             return False, None
         
         # Check if config.yml exists for static tunnel
-        config_path = project_root / "config.yml"
+        config_path = local_dev_path / "config.yml"
         if config_path.exists():
-            print("🔄 Starting Cloudflare tunnel with static URL (config.yml found)...")
-            # Use static tunnel with config
+            print("🔄 Starting named Cloudflare tunnel with permanent URL...")
+            print("🌐 Your tunnel URL: https://dev.getcute.chat")
+            
+            # Read config to get tunnel name
+            tunnel_name = "cute-whatsapp-bot"  # Default name from your setup
+            
+            # Use named tunnel with config
             process = subprocess.Popen(
-                [str(cloudflared_path), "tunnel", "--config", str(config_path), "run"],
+                [str(cloudflared_path), "tunnel", "--config", str(config_path), "run", tunnel_name],
                 creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == 'nt' else 0
             )
-            print("✅ Static tunnel started! Using URL from your config.yml")
+            print("✅ Named tunnel started with permanent URL!")
+            print("🔗 Webhook URL: https://dev.getcute.chat/webhook")
+            print("⚙️  Admin Panel: https://dev.getcute.chat/admin")
             return True, process
         else:
             print("🔄 Starting Cloudflare tunnel with temporary URL...")

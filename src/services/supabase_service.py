@@ -345,7 +345,7 @@ class SupabaseService:
     async def get_active_session(self, user_id: UUID) -> Optional[Session]:
         """Get active session for user."""
         try:
-            result = self.client.table("sessions").select("*").eq("user_id", str(user_id)).eq("status", SessionStatus.ACTIVE.value).order("start_time", desc=True).limit(1).execute()
+            result = self.admin_client.table("sessions").select("*").eq("user_id", str(user_id)).eq("status", SessionStatus.ACTIVE.value).order("start_time", desc=True).limit(1).execute()
             
             if result.data:
                 return Session(**result.data[0])
@@ -365,6 +365,30 @@ class SupabaseService:
             return len(result.data) > 0
         except Exception as e:
             logger.error(f"Error ending session: {e}")
+            return False
+    
+    async def update_session_metadata(self, session_id: UUID, metadata: Dict[str, Any]) -> bool:
+        """Update session metadata."""
+        try:
+            result = self.admin_client.table("sessions").update({
+                "metadata": metadata
+            }).eq("id", str(session_id)).execute()
+            
+            return len(result.data) > 0
+        except Exception as e:
+            logger.error(f"Error updating session metadata: {e}")
+            return False
+    
+    async def update_session_tags(self, session_id: UUID, tags: List[str]) -> bool:
+        """Update session tags."""
+        try:
+            result = self.admin_client.table("sessions").update({
+                "tags": tags
+            }).eq("id", str(session_id)).execute()
+            
+            return len(result.data) > 0
+        except Exception as e:
+            logger.error(f"Error updating session tags: {e}")
             return False
     
     # Tag Operations

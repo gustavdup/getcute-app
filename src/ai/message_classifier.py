@@ -89,17 +89,26 @@ class MessageClassifier:
                 logger.warning("Empty response from OpenAI")
                 return self._fallback_classification(content)
             
-            # Clean up the response text - sometimes OpenAI adds extra characters
+            # Clean up the response text - sometimes OpenAI adds extra characters or markdown
             result_text = result_text.strip()
+            
+            # Handle markdown code blocks
             if result_text.startswith('```json'):
-                result_text = result_text[7:-3].strip()
+                result_text = result_text[7:]  # Remove ```json
+                if result_text.endswith('```'):
+                    result_text = result_text[:-3]  # Remove closing ```
+                result_text = result_text.strip()
             elif result_text.startswith('```'):
-                result_text = result_text[3:-3].strip()
+                result_text = result_text[3:]  # Remove opening ```
+                if result_text.endswith('```'):
+                    result_text = result_text[:-3]  # Remove closing ```
+                result_text = result_text.strip()
                 
             try:
                 result = json.loads(result_text)
             except json.JSONDecodeError as je:
-                logger.error(f"JSON decode error: {je}. Response text: '{result_text}'")
+                logger.warning(f"Could not parse AI response as JSON: {result_text[:100]}...")
+                logger.error(f"Full JSON decode error: {je}")
                 return self._fallback_classification(content)
             
             return ClassificationResult(
@@ -125,15 +134,14 @@ Classify messages into these types:
 2. "reminder" - Messages about future tasks or events with time/date references
 3. "birthday" - Messages about someone's birthday with a person's name and date
 
-Extract relevant information and respond with JSON:
+IMPORTANT: Respond with valid JSON only, no markdown formatting or extra text.
 
 {
     "message_type": "note|reminder|birthday",
     "confidence": 0.0-1.0,
     "extracted_data": {
-        // For reminders: title, description, trigger_time (ISO format), repeat_type, repeat_interval
-        // For birthdays: person_name, birthdate (ISO format), year_known
-        // For notes: summary, key_points
+        "title": "string",
+        "description": "string"
     },
     "suggested_tags": ["tag1", "tag2"],
     "requires_followup": false,
@@ -223,7 +231,8 @@ Rules:
             
 User's existing tags: {', '.join(user_tags[:20])}
 
-Respond with JSON array of suggested tags (without # symbol):
+IMPORTANT: Respond with valid JSON array only, no markdown formatting.
+
 ["tag1", "tag2", "tag3"]
 
 Only suggest existing tags or very obvious new ones."""
@@ -242,8 +251,25 @@ Only suggest existing tags or very obvious new ones."""
             if not result_text:
                 logger.warning("Empty response from OpenAI for tag suggestions")
                 return []
+            
+            # Clean up markdown formatting
+            result_text = result_text.strip()
+            if result_text.startswith('```json'):
+                result_text = result_text[7:]
+                if result_text.endswith('```'):
+                    result_text = result_text[:-3]
+                result_text = result_text.strip()
+            elif result_text.startswith('```'):
+                result_text = result_text[3:]
+                if result_text.endswith('```'):
+                    result_text = result_text[:-3]
+                result_text = result_text.strip()
                 
-            suggested_tags = json.loads(result_text)
+            try:
+                suggested_tags = json.loads(result_text)
+            except json.JSONDecodeError as e:
+                logger.warning(f"Could not parse tag suggestions as JSON: {result_text[:100]}...")
+                return []
             
             return suggested_tags[:3]  # Limit to 3 suggestions
             
@@ -256,7 +282,8 @@ Only suggest existing tags or very obvious new ones."""
         try:
             system_prompt = """Extract search intent from natural language queries.
 
-Respond with JSON:
+IMPORTANT: Respond with valid JSON only, no markdown formatting.
+
 {
     "search_type": "text|semantic|date_range|tag_filter",
     "query_terms": ["term1", "term2"],
@@ -287,8 +314,30 @@ Respond with JSON:
                     "filters": {},
                     "intent": "find_specific"
                 }
+            
+            # Clean up markdown formatting
+            result_text = result_text.strip()
+            if result_text.startswith('```json'):
+                result_text = result_text[7:]
+                if result_text.endswith('```'):
+                    result_text = result_text[:-3]
+                result_text = result_text.strip()
+            elif result_text.startswith('```'):
+                result_text = result_text[3:]
+                if result_text.endswith('```'):
+                    result_text = result_text[:-3]
+                result_text = result_text.strip()
                 
-            return json.loads(result_text)
+            try:
+                return json.loads(result_text)
+            except json.JSONDecodeError as e:
+                logger.warning(f"Could not parse search intent as JSON: {result_text[:100]}...")
+                return {
+                    "search_type": "text",
+                    "query_terms": [query],
+                    "filters": {},
+                    "intent": "find_specific"
+                }
             
         except Exception as e:
             logger.error(f"Error extracting search intent: {e}")

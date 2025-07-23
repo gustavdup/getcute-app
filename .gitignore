@@ -105,3 +105,22 @@ tmp/
 
 # Media uploads (use cloud storage in production)
 uploads/
+
+# Prevent test files and temporary scripts in root directory
+/test_*.py
+/check_*.py
+/quick_*.py
+/get_*.py
+/setup_*.py
+/debug_*.py
+/temp_*.py
+
+# Prevent duplicate Cloudflare files in root
+/config.yml
+/start_*.bat
+/cloudflared.exe
+
+# Temporary development files
+scratch/
+temp_scripts/
+debug_output/

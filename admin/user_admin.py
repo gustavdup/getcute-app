@@ -257,11 +257,63 @@ async def get_user_stats(user_id: str):
         return {"status": "error", "message": str(e)}
 
 
+@user_admin_router.get("/api/conversation/{user_id}")
+async def get_user_conversation(user_id: str, days: int = Query(30, description="Number of days to look back")):
+    """Get user conversation/messages for timeline display - matches frontend expectation."""
+    try:
+        # Build the query
+        query = db_service.admin_client.table("messages").select(
+            "id, user_id, content, message_timestamp, type, tags, file_id, media_url, metadata, source_type"
+        ).eq("user_id", user_id)
+        
+        # Apply date filter only if days > 0
+        if days > 0:
+            cutoff_date = datetime.now() - timedelta(days=days)
+            query = query.gte("message_timestamp", cutoff_date.isoformat())
+        
+        # Execute query with ordering
+        messages_result = query.order("message_timestamp", desc=True).execute()
+        
+        messages = messages_result.data if messages_result.data else []
+        
+        # Debug logging
+        logger.info(f"Conversation API for user {user_id}, days={days}: Found {len(messages)} messages")
+        brain_dumps = [m for m in messages if m.get('type') == 'brain_dump']
+        logger.info(f"Brain dumps found: {len(brain_dumps)}")
+        for bd in brain_dumps:
+            logger.info(f"  Brain dump: {bd.get('id')} - {bd.get('message_timestamp')} - Content length: {len(bd.get('content', ''))}")
+        
+        # Get file info separately for messages that have files
+        for msg in messages:
+            if msg.get("file_id"):
+                try:
+                    file_result = db_service.admin_client.table("files").select(
+                        "filename, file_type, transcription_text, storage_path, upload_status"
+                    ).eq("id", msg["file_id"]).execute()
+                    if file_result.data and len(file_result.data) > 0:
+                        msg["file_info"] = file_result.data[0]
+                except Exception as e:
+                    logger.warning(f"Could not get file info for message {msg['id']}: {e}")
+                    msg["file_info"] = None
+        
+        return {
+            "status": "success",
+            "conversation": messages,  # Use "conversation" key as expected by frontend
+            "messages": messages,      # Also provide "messages" as fallback
+            "total_messages": len(messages)
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting user conversation: {e}")
+        return {"status": "error", "message": str(e)}
+
+
 def organize_user_data(messages: List[Dict], reminders: List[Dict], birthdays: List[Dict], sessions: List[Dict]) -> Dict[str, Any]:
     """Organize user data by categories for display."""
     organized = {
         "notes": [],
         "brain_dumps": [],
+        "brain_dump_sessions": [],  # Grouped brain dumps by session
         "media_files": [],
         "voice_notes": [],
         "images": [],
@@ -271,6 +323,9 @@ def organize_user_data(messages: List[Dict], reminders: List[Dict], birthdays: L
         "sessions": sessions,
         "tags": set()
     }
+    
+    # Group brain dump messages by session_id for notes tab
+    brain_dump_sessions = {}
     
     for msg in messages:
         msg_type = msg.get("type", "note")
@@ -288,6 +343,33 @@ def organize_user_data(messages: List[Dict], reminders: List[Dict], birthdays: L
         if not is_bot_response and not is_command:
             if msg_type == "brain_dump":
                 organized["brain_dumps"].append(msg)
+                
+                # Group brain dump messages by session_id
+                session_id = msg.get("session_id")
+                if session_id:
+                    if session_id not in brain_dump_sessions:
+                        brain_dump_sessions[session_id] = {
+                            "session_id": session_id,
+                            "messages": [],
+                            "tags": set(),
+                            "start_time": None,
+                            "end_time": None
+                        }
+                    
+                    brain_dump_sessions[session_id]["messages"].append(msg)
+                    if msg_tags:
+                        brain_dump_sessions[session_id]["tags"].update(msg_tags)
+                    
+                    # Track earliest and latest timestamps
+                    timestamp = msg.get("message_timestamp")
+                    if timestamp:
+                        if not brain_dump_sessions[session_id]["start_time"] or timestamp < brain_dump_sessions[session_id]["start_time"]:
+                            brain_dump_sessions[session_id]["start_time"] = timestamp
+                        if not brain_dump_sessions[session_id]["end_time"] or timestamp > brain_dump_sessions[session_id]["end_time"]:
+                            brain_dump_sessions[session_id]["end_time"] = timestamp
+                else:
+                    # Brain dump without session_id - add as individual note
+                    organized["notes"].append(msg)
             else:
                 organized["notes"].append(msg)
         
@@ -305,6 +387,21 @@ def organize_user_data(messages: List[Dict], reminders: List[Dict], birthdays: L
                 organized["documents"].append(file_data)
             
             organized["media_files"].append(file_data)
+    
+    # Convert brain dump sessions dict to list and sort by start time
+    for session_id, session_data in brain_dump_sessions.items():
+        session_data["tags"] = sorted(list(session_data["tags"]))
+        # Create consolidated content for display
+        session_data["consolidated_content"] = "\n\n".join([
+            msg.get("content", "") for msg in session_data["messages"]
+        ])
+        organized["brain_dump_sessions"].append(session_data)
+    
+    # Sort brain dump sessions by start time (newest first)
+    organized["brain_dump_sessions"].sort(
+        key=lambda x: x.get("start_time", ""),
+        reverse=True
+    )
     
     # Convert tags set to sorted list
     organized["tags"] = sorted(list(organized["tags"]))
