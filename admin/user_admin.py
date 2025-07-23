@@ -488,3 +488,27 @@ async def get_reminder_scheduler_status():
             "error": str(e),
             "message": "Failed to get scheduler status"
         })
+
+
+@user_admin_router.get("/media-monitor/status")
+async def get_media_monitor_status():
+    """Get media processing monitor status."""
+    try:
+        from services.media_monitor import get_media_monitor
+        
+        monitor = await get_media_monitor()
+        status = await monitor.get_status()
+        
+        return JSONResponse({
+            "success": True,
+            "status": status,
+            "message": "Media monitor is running" if status["is_running"] else "Media monitor is stopped"
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting media monitor status: {e}")
+        return JSONResponse({
+            "success": False,
+            "error": str(e),
+            "message": "Failed to get monitor status"
+        })

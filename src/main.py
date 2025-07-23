@@ -23,6 +23,7 @@ from handlers.webhook_handler import webhook_router
 from handlers.slash_commands import commands_router
 from utils.logger import setup_application_logging
 from services.reminder_scheduler import get_reminder_scheduler
+from services.media_monitor import get_media_monitor
 
 # Configure comprehensive logging
 setup_application_logging()
@@ -93,9 +94,17 @@ async def startup_event():
     try:
         scheduler = await get_reminder_scheduler()
         await scheduler.start()
-        logger.info("✅ Reminder scheduler started - checking every minute for due reminders")
+        logger.info("Reminder scheduler started - checking every minute for due reminders")
     except Exception as e:
-        logger.error(f"❌ Failed to start reminder scheduler: {e}")
+        logger.error(f"Failed to start reminder scheduler: {e}")
+    
+    # Start media processing monitor
+    try:
+        media_monitor = await get_media_monitor()
+        await media_monitor.start()
+        logger.info("Media processing monitor started - checking every hour")
+    except Exception as e:
+        logger.error(f"Failed to start media processing monitor: {e}")
     
     logger.info("Application startup complete")
 
@@ -109,9 +118,17 @@ async def shutdown_event():
     try:
         scheduler = await get_reminder_scheduler()
         await scheduler.stop()
-        logger.info("✅ Reminder scheduler stopped successfully")
+        logger.info("Reminder scheduler stopped successfully")
     except Exception as e:
-        logger.error(f"❌ Error stopping reminder scheduler: {e}")
+        logger.error(f"Error stopping reminder scheduler: {e}")
+    
+    # Stop media processing monitor
+    try:
+        media_monitor = await get_media_monitor()
+        await media_monitor.stop()
+        logger.info("Media processing monitor stopped successfully")
+    except Exception as e:
+        logger.error(f"Error stopping media processing monitor: {e}")
     
     logger.info("👋 Application shutdown complete")
 

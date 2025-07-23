@@ -2,7 +2,7 @@
 Tagging workflow for managing tag suggestions and user responses.
 """
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 from src.models.database import User, Message
 from src.services.supabase_service import SupabaseService
@@ -78,7 +78,7 @@ class TaggingWorkflow:
             )
             
             target_message = None
-            now = datetime.now()
+            now = datetime.now(timezone.utc)
             
             for msg in recent_messages:
                 # Look for messages from the last 5 minutes that have no tags

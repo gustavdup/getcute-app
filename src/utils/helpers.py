@@ -3,7 +3,7 @@ Common helper functions for the Cute WhatsApp Bot.
 """
 import re
 import hashlib
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
 from uuid import uuid4
 
@@ -51,7 +51,7 @@ def truncate_text(text: str, max_length: int = 100, suffix: str = "...") -> str:
 
 def format_datetime(dt: datetime, format_type: str = "friendly") -> str:
     """Format datetime in various friendly formats."""
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     diff = now - dt
     
     if format_type == "friendly":
@@ -82,7 +82,7 @@ def format_datetime(dt: datetime, format_type: str = "friendly") -> str:
 def parse_time_expression(text: str) -> Optional[datetime]:
     """Parse natural language time expressions."""
     text = text.lower().strip()
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     
     # Simple patterns - in production, use more sophisticated NLP
     patterns = {
@@ -192,7 +192,7 @@ def format_file_size(size_bytes: int) -> str:
 def is_business_hours(dt: Optional[datetime] = None) -> bool:
     """Check if given time is during business hours (9 AM - 5 PM, Mon-Fri)."""
     if dt is None:
-        dt = datetime.now()
+        dt = datetime.now(timezone.utc)
     
     # Monday = 0, Sunday = 6
     if dt.weekday() >= 5:  # Saturday or Sunday

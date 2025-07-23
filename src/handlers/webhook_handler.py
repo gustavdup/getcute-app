@@ -164,7 +164,7 @@ async def test_webhook():
         test_message = ProcessedMessage(
             user_phone="+1234567890",
             message_id="test_123",
-            timestamp=datetime.now(),
+            timestamp=datetime.now(timezone.utc),
             content="Hello, this is a test message!",
             message_type="text"
         )

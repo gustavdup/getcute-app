@@ -5,7 +5,7 @@ import logging
 import httpx
 import json
 from typing import Optional, Dict, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from src.config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -73,7 +73,7 @@ class WhatsAppTokenManager:
         
         # Check if token expires within next 30 minutes
         if self.token_expires_at:
-            return datetime.now() + timedelta(minutes=30) >= self.token_expires_at
+            return datetime.now(timezone.utc) + timedelta(minutes=30) >= self.token_expires_at
             
         return False
     
@@ -112,7 +112,7 @@ class WhatsAppTokenManager:
                     if new_token:
                         self.current_token = new_token
                         if expires_in:
-                            self.token_expires_at = datetime.now() + timedelta(seconds=expires_in)
+                            self.token_expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
                         
                         logger.info(f"Successfully renewed token. New expiration: {self.token_expires_at}")
                         return new_token
@@ -145,8 +145,8 @@ class WhatsAppTokenManager:
         return {
             "has_token": bool(self.current_token),
             "expires_at": self.token_expires_at.isoformat() if self.token_expires_at else None,
-            "is_expired": self.token_expires_at and datetime.now() >= self.token_expires_at if self.token_expires_at else False,
-            "expires_soon": self.token_expires_at and datetime.now() + timedelta(hours=1) >= self.token_expires_at if self.token_expires_at else False
+            "is_expired": self.token_expires_at and datetime.now(timezone.utc) >= self.token_expires_at if self.token_expires_at else False,
+            "expires_soon": self.token_expires_at and datetime.now(timezone.utc) + timedelta(hours=1) >= self.token_expires_at if self.token_expires_at else False
         }
 
 

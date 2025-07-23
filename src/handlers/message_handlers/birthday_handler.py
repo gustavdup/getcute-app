@@ -3,7 +3,7 @@ Birthday handler for processing birthday-related messages.
 Uses AI to extract birthday information from various message formats.
 """
 from typing import Any, Dict, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 from src.models.database import Birthday
 from src.models.message_types import ProcessedMessage, BirthdayExtraction
@@ -51,7 +51,7 @@ class BirthdayHandler(BaseHandler):
                     user_id=user.id,
                     person_name=birthday_info["person_name"],
                     birthdate=birthday_info["birthdate"],
-                    created_at=datetime.now()
+                    created_at=datetime.now(timezone.utc)
                 )
                 
                 saved_birthday = await self.db_service.save_birthday(birthday)

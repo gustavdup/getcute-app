@@ -5,7 +5,7 @@ Now uses simplified workflow with /bd brain dump sessions and no tag prompting.
 import logging
 import os
 from typing import Dict, Any, Optional, List
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 
 # Ensure environment variables are loaded
@@ -244,7 +244,7 @@ class MessageRouter:
                 response = "🧠 Brain dump session started!"
                 if tags:
                     response += f" Tags: {', '.join(['#' + tag for tag in tags])}"
-                response += "\n\nSend your thoughts and I'll collect them. Type /end or /cancel when done."
+                response += "\n\nSend your thoughts and I'll collect them silently. Type /end when done, or I'll auto-save after 5 minutes."
                 
                 await self.whatsapp_service.send_text_message(message.user_phone, response)
                 self.msg_logger.log_success_stage("BRAIN_DUMP_STARTED", 
@@ -265,7 +265,7 @@ class MessageRouter:
             )
     
     async def _end_active_session(self, message: ProcessedMessage, user: User):
-        """End any active brain dump session and create consolidated note."""
+        """End active brain dump session and process all messages."""
         try:
             if not user.id:
                 logger.error("User ID is None - cannot end brain dump session")
@@ -273,23 +273,7 @@ class MessageRouter:
                 
             active_session = await self.db_service.get_active_session(user.id)
             if active_session and active_session.id:
-                # End the session
-                await self.db_service.end_session(active_session.id, SessionStatus.COMPLETED)
-                
-                # Get message count by querying the database for brain dumps with this session ID
-                session_messages = await self.db_service.get_user_messages(
-                    user_id=user.id,
-                    limit=100,
-                    since=active_session.start_time
-                )
-                message_count = len([m for m in session_messages if m.session_id == active_session.id])
-                
-                feedback = f"✅ Brain dump session ended! Saved {message_count} individual thought{'s' if message_count != 1 else ''}."
-                await self.whatsapp_service.send_text_message(message.user_phone, feedback)
-                
-                self.msg_logger.log_success_stage("BRAIN_DUMP_ENDED",
-                                                {"message_id": message.message_id, "user_phone": message.user_phone},
-                                                f"Session ID: {active_session.id}, Messages: {message_count}")
+                await self._process_and_end_brain_dump_session(user, active_session, message.user_phone, "manual")
             else:
                 await self.whatsapp_service.send_text_message(
                     message.user_phone, 
@@ -299,12 +283,64 @@ class MessageRouter:
             self.msg_logger.log_error_stage("BRAIN_DUMP_END_ERROR", e,
                                           {"message_id": message.message_id, "user_phone": message.user_phone})
     
+    async def _process_and_end_brain_dump_session(self, user: User, session, user_phone: str, reason: str):
+        """End the brain dump session and provide summary."""
+        try:
+            if not user.id or not session.id:
+                logger.error("Missing user ID or session ID")
+                return
+                
+            # Get all messages from this session for counting
+            session_messages = await self.db_service.get_user_messages(
+                user_id=user.id,
+                limit=100,
+                since=session.start_time
+            )
+            brain_dump_messages = [m for m in session_messages if m.session_id == session.id and m.type == MessageType.BRAIN_DUMP]
+            
+            # End the session
+            await self.db_service.end_session(session.id, SessionStatus.COMPLETED)
+            
+            # Send confirmation with correct count
+            message_count = len(brain_dump_messages)
+            reason_text = "timed out" if reason == "timeout" else "ended"
+            tags_text = " ".join([f"#{tag}" for tag in (session.tags or [])])
+            
+            if message_count > 0:
+                feedback = f"✅ Brain dump session {reason_text}! Saved {message_count} thought{'s' if message_count != 1 else ''} as individual notes."
+                if tags_text:
+                    feedback += f"\nTags: {tags_text}"
+            else:
+                feedback = f"✅ Brain dump session {reason_text}, but no messages were saved."
+            
+            await self.whatsapp_service.send_text_message(user_phone, feedback)
+            
+            self.msg_logger.log_success_stage("BRAIN_DUMP_SESSION_ENDED",
+                                            {"user_phone": user_phone},
+                                            f"Session ID: {session.id}, Messages: {message_count}, Reason: {reason}")
+            
+        except Exception as e:
+            logger.error(f"Error ending brain dump session: {e}")
+            await self.whatsapp_service.send_text_message(
+                user_phone, 
+                "Sorry, there was an error ending your brain dump session."
+            )
+    
     async def _handle_brain_dump_message(self, message: ProcessedMessage, user: User, session):
         """Handle messages within an active brain dump session - save each message individually."""
         try:
             if not user.id:
                 logger.error("User ID is None - cannot save brain dump message")
                 return
+                
+            # Check if session has timed out (5 minutes)
+            session_timeout_minutes = 5
+            if session.start_time:
+                timeout_delta = timedelta(minutes=session_timeout_minutes)
+                if datetime.now(timezone.utc) - session.start_time > timeout_delta:
+                    # Session timed out - process all messages and end session
+                    await self._process_and_end_brain_dump_session(user, session, message.user_phone, "timeout")
+                    return
                 
             # Extract any hashtags from the message and add to session tags
             import re
@@ -317,9 +353,6 @@ class MessageRouter:
             # Combine session tags with any new tags found in this message
             all_tags = list(set((session.tags or []) + new_tags))
             
-            # Generate vector embedding for this individual message
-            vector_embedding = await self.media_processor.generate_vector_embedding(clean_content)
-            
             # Create individual brain dump message (not consolidated)
             brain_dump_message = Message(
                 user_id=user.id,
@@ -330,7 +363,7 @@ class MessageRouter:
                 source_type=SourceType.TEXT,
                 origin_message_id=message.message_id,
                 session_id=session.id,  # Link to session
-                vector_embedding=vector_embedding
+                # Don't generate vector embedding yet - do it at the end when consolidating
             )
             
             # Save the individual message immediately
@@ -340,10 +373,9 @@ class MessageRouter:
             if new_tags:
                 await self.db_service.update_session_tags(session.id, all_tags)
             
-            # Send quick confirmation (emoji only to minimize interruption)
-            await self.whatsapp_service.send_text_message(message.user_phone, "✅")
+            # DON'T send any response during the session - just collect messages silently
             
-            self.msg_logger.log_success_stage("BRAIN_DUMP_MESSAGE_SAVED",
+            self.msg_logger.log_success_stage("BRAIN_DUMP_MESSAGE_COLLECTED",
                                             {"message_id": message.message_id, "user_phone": message.user_phone},
                                             f"Session: {session.id}, Tags: {all_tags}, New tags: {new_tags}")
             

@@ -74,6 +74,7 @@ class User(BaseModel):
     id: Optional[UUID] = None
     phone_number: str
     platform: str = "whatsapp"
+    timezone: str = "UTC"  # IANA timezone (e.g., "America/New_York", "Europe/Berlin")
     created_at: Optional[datetime] = None
     last_seen: Optional[datetime] = None
     preferences: Optional[Dict[str, Any]] = None

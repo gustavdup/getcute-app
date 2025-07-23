@@ -5,7 +5,7 @@ Tracks messages through all processing stages.
 import logging
 import logging.handlers
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 import json
 import sys
@@ -142,7 +142,7 @@ class MessageProcessingLogger:
     def log_message_stage(self, stage: str, message_data: Dict[str, Any], extra_info: Optional[Dict[str, Any]] = None):
         """Log a message processing stage with structured data."""
         log_entry = {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "stage": stage,
             "message_id": message_data.get("message_id", "unknown"),
             "user_phone": message_data.get("user_phone", "unknown"),
@@ -157,7 +157,7 @@ class MessageProcessingLogger:
     def log_error_stage(self, stage: str, error: Exception, message_data: Dict[str, Any], extra_info: Optional[Dict[str, Any]] = None):
         """Log an error during message processing."""
         log_entry = {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "stage": stage,
             "error_type": type(error).__name__,
             "error_message": str(error),
@@ -172,7 +172,7 @@ class MessageProcessingLogger:
     def log_success_stage(self, stage: str, message_data: Dict[str, Any], result: Any = None, extra_info: Optional[Dict[str, Any]] = None):
         """Log a successful completion of a processing stage."""
         log_entry = {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "stage": stage,
             "status": "SUCCESS",
             "message_id": message_data.get("message_id", "unknown"),
@@ -186,7 +186,7 @@ class MessageProcessingLogger:
     def log_classification_result(self, message_data: Dict[str, Any], classification: Dict[str, Any]):
         """Log AI classification results."""
         log_entry = {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "stage": "AI_CLASSIFICATION",
             "message_id": message_data.get("message_id", "unknown"),
             "user_phone": message_data.get("user_phone", "unknown"),
@@ -204,7 +204,7 @@ class MessageProcessingLogger:
     def log_database_operation(self, operation: str, table: str, record_id: Optional[str] = None, success: bool = True, error: Optional[str] = None):
         """Log database operations."""
         log_entry = {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "stage": "DATABASE_OPERATION",
             "operation": operation,
             "table": table,
@@ -221,7 +221,7 @@ class MessageProcessingLogger:
     def log_media_processing(self, media_type: str, media_id: str, user_id: str, processing_stage: str, success: bool = True, error: Optional[str] = None, file_info: Optional[Dict[str, Any]] = None):
         """Log media processing stages."""
         log_entry = {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "stage": "MEDIA_PROCESSING",
             "media_type": media_type,
             "media_id": media_id,
@@ -255,7 +255,7 @@ class MessageProcessingLogger:
             extra_info: Additional context
         """
         log_entry = {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "stage": "AI_EXTRACTION_FAILURE",
             "extraction_type": extraction_type,
             "message_id": message_data.get("message_id", "unknown"),

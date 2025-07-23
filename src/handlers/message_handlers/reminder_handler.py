@@ -2,11 +2,13 @@
 Reminder handler for processing reminder-related messages.
 """
 from typing import Any, Dict, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 from src.models.database import Reminder, RepeatType
 from src.models.message_types import ProcessedMessage
 from src.utils.logger import MessageProcessingLogger
+from src.utils.timezone_utils import TimezoneManager, get_user_current_time
+from src.services.user_timezone_service import UserTimezoneService
 from .base_handler import BaseHandler
 
 
@@ -19,6 +21,7 @@ class ReminderHandler(BaseHandler):
         self.whatsapp_service = whatsapp_service
         self.classifier = classifier  # Use classifier for AI completions
         self.msg_logger = MessageProcessingLogger()
+        self.timezone_service = UserTimezoneService(db_service)
     
     async def can_handle(self, message: ProcessedMessage, user, classification: Dict[str, Any]) -> bool:
         """Check if this message is a reminder."""
@@ -66,19 +69,32 @@ class ReminderHandler(BaseHandler):
                     repeat_until=reminder_info.get("repeat_until"),
                     tags=reminder_info.get("extracted_tags", []),
                     is_active=True,
-                    created_at=datetime.now()
+                    created_at=datetime.now(timezone.utc)
                 )
                 
                 saved_reminder = await self.db_service.save_reminder(reminder)
                 self.msg_logger.log_database_operation("INSERT", "reminders", str(saved_reminder.id), success=True)
                 
-                # Send confirmation message
-                time_str = reminder_info["trigger_time"].strftime("%B %d, %Y at %I:%M %p")
+                # Send confirmation message - convert times back to user's timezone for display
+                user_id = str(user.id) if user and user.id else None
+                user_timezone = await self.timezone_service.get_user_timezone(user_id) if user_id else "UTC"
+                
+                # Convert trigger_time back to user's timezone for display
+                user_trigger_time = TimezoneManager.convert_from_utc(reminder_info["trigger_time"], user_timezone)
+                time_str = user_trigger_time.strftime("%B %d, %Y at %I:%M %p")
+                
+                # Add timezone info if not UTC
+                if user_timezone != "UTC":
+                    timezone_info = TimezoneManager.get_timezone_info(user_timezone)
+                    time_str += f" ({timezone_info['timezone_name']})"
+                
                 repeat_str = ""
                 if repeat_type != RepeatType.NONE:
                     repeat_str = f" (repeating {repeat_type.value}"
                     if reminder_info.get("repeat_until"):
-                        until_str = reminder_info["repeat_until"].strftime("%B %d, %Y")
+                        # Also convert repeat_until to user's timezone
+                        user_repeat_until = TimezoneManager.convert_from_utc(reminder_info["repeat_until"], user_timezone)
+                        until_str = user_repeat_until.strftime("%B %d, %Y")
                         repeat_str += f" until {until_str}"
                     repeat_str += ")"
                 
@@ -141,6 +157,15 @@ class ReminderHandler(BaseHandler):
             }
         
         try:
+            # Get user's timezone and current time in their timezone
+            user_id = str(user.id) if user and user.id else None
+            if not user_id:
+                self.msg_logger.logger.error("User ID is None in reminder extraction")
+                return None
+                
+            user_timezone = await self.timezone_service.get_user_timezone(user_id)
+            user_current_time = get_user_current_time(user_timezone)
+            
             system_prompt = """You are an expert at extracting reminder information from text messages.
 Extract the reminder details from the user's message and handle complex time calculations.
 
@@ -199,9 +224,14 @@ VALIDATION RULES:
 For relative times like "tomorrow", "next week", use the current date/time as reference.
 For times without dates, assume today if it's a future time, otherwise tomorrow."""
             
-            # Get current time for context
-            current_time = datetime.now()
-            user_prompt = f"Current date/time: {current_time.isoformat()}\n\nExtract reminder from: '{content}'"
+            # Create timezone-aware prompt
+            timezone_info = TimezoneManager.get_timezone_info(user_timezone)
+            user_prompt = f"""Current date/time in user's timezone ({user_timezone}): {user_current_time.strftime('%Y-%m-%d %H:%M:%S %A')}
+Timezone: {timezone_info['timezone_name']} (UTC{timezone_info['current_offset_hours']:+.0f})
+
+Extract reminder from: '{content}'
+
+IMPORTANT: All times should be interpreted in the user's timezone ({user_timezone}) unless explicitly stated otherwise."""
             
             response = await self.classifier.generate_completion(
                 messages=[
@@ -345,13 +375,24 @@ For times without dates, assume today if it's a future time, otherwise tomorrow.
                     
                     return None
                 
-                # Parse the trigger time
+                # Parse the trigger time and convert to UTC
                 try:
-                    trigger_time = datetime.fromisoformat(result["trigger_time"])
+                    # AI returns time in ISO format, assume it's in user's timezone if no timezone specified
+                    trigger_time_str = result["trigger_time"]
+                    
+                    # Parse the ISO datetime
+                    if "+" in trigger_time_str or trigger_time_str.endswith("Z"):
+                        # Already has timezone info - parse and convert to UTC
+                        trigger_time_with_tz = datetime.fromisoformat(trigger_time_str.replace("Z", "+00:00"))
+                        trigger_time = trigger_time_with_tz.astimezone(timezone.utc)
+                    else:
+                        # No timezone info, assume user's timezone and convert to UTC
+                        trigger_time_naive = datetime.fromisoformat(trigger_time_str)
+                        trigger_time = TimezoneManager.convert_to_utc(trigger_time_naive, user_timezone)
                     
                     # Only adjust to tomorrow if it's clearly meant for today but time has passed
                     # and there's no explicit date calculation involved
-                    if trigger_time <= current_time and not result.get("original_event_time"):
+                    if trigger_time <= datetime.now(timezone.utc) and not result.get("original_event_time"):
                         from datetime import timedelta
                         trigger_time = trigger_time + timedelta(days=1)
                         
@@ -380,7 +421,17 @@ For times without dates, assume today if it's a future time, otherwise tomorrow.
                 repeat_until = None
                 if result.get("repeat_until"):
                     try:
-                        repeat_until = datetime.fromisoformat(result["repeat_until"])
+                        # Handle repeat_until timezone conversion like trigger_time
+                        repeat_until_str = result["repeat_until"]
+                        
+                        if "+" in repeat_until_str or repeat_until_str.endswith("Z"):
+                            # Already has timezone info - convert to UTC
+                            repeat_until_with_tz = datetime.fromisoformat(repeat_until_str.replace("Z", "+00:00"))
+                            repeat_until = repeat_until_with_tz.astimezone(timezone.utc).replace(tzinfo=None)
+                        else:
+                            # No timezone info, assume user's timezone
+                            repeat_until_naive = datetime.fromisoformat(repeat_until_str)
+                            repeat_until = TimezoneManager.convert_to_utc(repeat_until_naive, user_timezone)
                         
                         # Validate that repeat_until is after trigger_time
                         if repeat_until <= trigger_time:

@@ -3,7 +3,7 @@ Reminder scheduler service that checks for due reminders and sends notifications
 """
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
@@ -22,7 +22,8 @@ class ReminderScheduler:
         """Initialize the reminder scheduler."""
         self.db_service = db_service
         self.whatsapp_service = whatsapp_service
-        self.scheduler = AsyncIOScheduler()
+        # Configure scheduler to use UTC timezone explicitly
+        self.scheduler = AsyncIOScheduler(timezone=timezone.utc)
         self.is_running = False
         self._sent_reminders = set()  # Track recently sent reminders to prevent duplicates
         
@@ -33,10 +34,15 @@ class ReminderScheduler:
             return
             
         try:
-            # Add job to check reminders every minute
+            # Calculate when to start the scheduler - 5 seconds after the next minute
+            now = datetime.now(timezone.utc)
+            next_minute = now.replace(second=0, microsecond=0) + timedelta(minutes=1)
+            start_time = next_minute + timedelta(seconds=5)
+            
+            # Add job to check reminders every minute, starting at 5 seconds past the minute
             self.scheduler.add_job(
                 self._check_and_send_reminders,
-                trigger=IntervalTrigger(minutes=1),
+                trigger=IntervalTrigger(minutes=1, start_date=start_time),
                 id='reminder_checker',
                 name='Check Due Reminders',
                 replace_existing=True
@@ -44,7 +50,10 @@ class ReminderScheduler:
             
             self.scheduler.start()
             self.is_running = True
-            logger.info("Reminder scheduler started - checking every minute")
+            
+            # Log the precise start time
+            delay_seconds = (start_time - now).total_seconds()
+            logger.info(f"Reminder scheduler started - first check in {delay_seconds:.1f}s at {start_time.strftime('%H:%M:%S')}, then every minute at :05 seconds")
             
         except Exception as e:
             logger.error(f"Failed to start reminder scheduler: {e}")
@@ -98,7 +107,7 @@ class ReminderScheduler:
                     
                     # Clean up old entries (keep only last hour)
                     from datetime import timedelta
-                    cutoff_time = datetime.now() - timedelta(hours=1)
+                    cutoff_time = datetime.now(timezone.utc) - timedelta(hours=1)
                     self._sent_reminders = {
                         key for key in self._sent_reminders 
                         if not any(key.endswith(old_time) for old_time in [
@@ -114,9 +123,9 @@ class ReminderScheduler:
         try:
             # Only check for missed reminders every hour to avoid overhead
             if not hasattr(self, '_last_missed_check'):
-                self._last_missed_check = datetime.now() - timedelta(hours=2)
+                self._last_missed_check = datetime.now(timezone.utc) - timedelta(hours=2)
             
-            if datetime.now() - self._last_missed_check < timedelta(hours=1):
+            if datetime.now(timezone.utc) - self._last_missed_check < timedelta(hours=1):
                 return
             
             logger.debug("Checking for missed recurring reminders...")
@@ -136,7 +145,7 @@ class ReminderScheduler:
                         logger.error(f"Failed to save recovery reminder {recovery_reminder.title}: {e}")
             
             # Update last check time
-            self._last_missed_check = datetime.now()
+            self._last_missed_check = datetime.now(timezone.utc)
             
         except Exception as e:
             logger.error(f"Error checking missed recurring reminders: {e}")
@@ -181,7 +190,7 @@ class ReminderScheduler:
             message += f"\n\n{reminder.description}"
         
         # Add current time info
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         current_time_str = now.strftime("%I:%M %p")
         message += f"\n\n🕐 Reminder sent at: {current_time_str}"
         
@@ -223,7 +232,7 @@ class ReminderScheduler:
                     if reminder.repeat_until and next_trigger > reminder.repeat_until:
                         # Recurring reminder has reached its end date
                         reminder.is_active = False
-                        reminder.completed_at = datetime.now()
+                        reminder.completed_at = datetime.now(timezone.utc)
                         logger.info(f"Recurring reminder {reminder.id} completed - reached repeat_until date: {reminder.repeat_until}")
                     else:
                         # Create new reminder entry for next occurrence instead of updating existing one
@@ -242,7 +251,7 @@ class ReminderScheduler:
                             repeat_until=reminder.repeat_until,
                             tags=reminder.tags,
                             is_active=True,
-                            created_at=datetime.now()
+                            created_at=datetime.now(timezone.utc)
                         )
                         
                         # Save the next occurrence
@@ -250,17 +259,17 @@ class ReminderScheduler:
                         
                         # Mark current occurrence as completed
                         reminder.is_active = False
-                        reminder.completed_at = datetime.now()
+                        reminder.completed_at = datetime.now(timezone.utc)
                         
                         logger.info(f"Created next occurrence of recurring reminder {reminder.id} -> {next_reminder.id} scheduled for: {next_trigger}")
                 else:
                     # If we couldn't calculate next occurrence, deactivate
                     reminder.is_active = False
-                    reminder.completed_at = datetime.now()
+                    reminder.completed_at = datetime.now(timezone.utc)
             else:
                 # Non-recurring reminder - mark as inactive and completed
                 reminder.is_active = False
-                reminder.completed_at = datetime.now()
+                reminder.completed_at = datetime.now(timezone.utc)
             
             # Save current reminder to database
             await self.db_service.save_reminder(reminder)

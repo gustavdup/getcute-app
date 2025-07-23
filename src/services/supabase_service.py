@@ -3,7 +3,7 @@ Supabase database service for CRUD operations.
 """
 import logging
 from typing import List, Optional, Dict, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 from src.config.database import get_db_client, get_admin_client
@@ -33,7 +33,7 @@ class SupabaseService:
             
             if result.data:
                 user_data = result.data[0]
-                user_data['last_seen'] = datetime.now()
+                user_data['last_seen'] = datetime.now(timezone.utc)
                 
                 # Update last_seen (use admin client)
                 self.admin_client.table("users").update({"last_seen": user_data['last_seen'].isoformat()}).eq("id", user_data['id']).execute()
@@ -45,8 +45,8 @@ class SupabaseService:
                     id=uuid4(),
                     phone_number=phone_number,
                     platform=platform,
-                    created_at=datetime.now(),
-                    last_seen=datetime.now()
+                    created_at=datetime.now(timezone.utc),
+                    last_seen=datetime.now(timezone.utc)
                 )
                 
                 # Convert to dict with proper serialization
@@ -65,7 +65,7 @@ class SupabaseService:
     async def get_user(self, user_id: UUID) -> Optional[User]:
         """Get user by ID."""
         try:
-            result = self.client.table("users").select("*").eq("id", str(user_id)).execute()
+            result = self.admin_client.table("users").select("*").eq("id", str(user_id)).execute()
             if result.data:
                 return User(**result.data[0])
             return None
@@ -132,7 +132,7 @@ class SupabaseService:
     ) -> List[Message]:
         """Get user messages with optional filters."""
         try:
-            query = self.client.table("messages").select("*").eq("user_id", str(user_id))
+            query = self.admin_client.table("messages").select("*").eq("user_id", str(user_id))
             
             if message_type:
                 query = query.eq("type", message_type.value)
@@ -161,7 +161,7 @@ class SupabaseService:
         """Search messages using vector similarity (requires pgvector setup)."""
         try:
             # Use RPC call for vector search with pgvector
-            result = self.client.rpc(
+            result = self.admin_client.rpc(
                 'search_messages_by_vector',
                 {
                     'user_id': str(user_id),
@@ -200,11 +200,13 @@ class SupabaseService:
     
     # Reminder Operations
     async def save_reminder(self, reminder: Reminder) -> Reminder:
-        """Save a reminder to the database."""
+        """Save a reminder to the database (create or update)."""
         try:
+            # Set created_at only if it's a new reminder (no existing ID or created_at)
             if not reminder.id:
                 reminder.id = uuid4()
-                reminder.created_at = datetime.now()
+            if not reminder.created_at:
+                reminder.created_at = datetime.now(timezone.utc)
             
             # Convert to dict with proper serialization
             reminder_data = reminder.dict()
@@ -214,8 +216,11 @@ class SupabaseService:
             reminder_data['trigger_time'] = reminder_data['trigger_time'].isoformat()
             if reminder_data.get('completed_at'):
                 reminder_data['completed_at'] = reminder_data['completed_at'].isoformat()
+            if reminder_data.get('repeat_until'):
+                reminder_data['repeat_until'] = reminder_data['repeat_until'].isoformat()
             
-            result = self.admin_client.table("reminders").insert(reminder_data).execute()
+            # Use upsert to handle both create and update operations
+            result = self.admin_client.table("reminders").upsert(reminder_data).execute()
             return Reminder(**result.data[0])
         except Exception as e:
             logger.error(f"Error saving reminder: {e}")
@@ -229,13 +234,13 @@ class SupabaseService:
     ) -> List[Reminder]:
         """Get user reminders."""
         try:
-            query = self.client.table("reminders").select("*").eq("user_id", str(user_id))
+            query = self.admin_client.table("reminders").select("*").eq("user_id", str(user_id))
             
             if active_only:
                 query = query.eq("is_active", True)
             
             if upcoming_only:
-                query = query.gte("trigger_time", datetime.now().isoformat())
+                query = query.gte("trigger_time", datetime.now(timezone.utc).isoformat())
             
             result = query.order("trigger_time", desc=False).execute()
             return [Reminder(**r) for r in result.data]
@@ -246,16 +251,17 @@ class SupabaseService:
     async def get_due_reminders(self, time_window_minutes: int = 5) -> List[Reminder]:
         """Get reminders that are due within the time window."""
         try:
-            now = datetime.now()
-            # Look back 2 minutes to catch any missed reminders due to timing issues
-            start_time = now - timedelta(minutes=2)  
+            # CRITICAL: Use UTC time to match database storage timezone
+            now = datetime.now(timezone.utc)
+            # Look back 1 hour to catch any missed reminders due to system downtime/restarts
+            start_time = now - timedelta(hours=1)  
             end_time = now + timedelta(minutes=time_window_minutes)
             
             # Get reminders that:
             # 1. Are active
             # 2. Have trigger_time between start_time and end_time
             # 3. Don't have completed_at set (haven't been sent yet)
-            result = self.client.table("reminders").select("*").eq(
+            result = self.admin_client.table("reminders").select("*").eq(
                 "is_active", True
             ).gte(
                 "trigger_time", start_time.isoformat()
@@ -279,7 +285,8 @@ class SupabaseService:
         If not, create ONE reminder for the next expected occurrence (not multiple missed ones).
         """
         try:
-            now = datetime.now()
+            # CRITICAL: Use UTC time to match database storage timezone
+            now = datetime.now(timezone.utc)
             cutoff_time = now - timedelta(hours=hours_back)
             
             # Find completed recurring reminders that:
@@ -288,7 +295,7 @@ class SupabaseService:
             # 3. Should have had a next occurrence created
             # 4. But no active reminder exists for the expected next trigger time
             
-            result = self.client.table("reminders").select("*").eq(
+            result = self.admin_client.table("reminders").select("*").eq(
                 "is_active", False  # Completed reminders
             ).neq(
                 "repeat_type", "none"  # Recurring reminders only
@@ -341,7 +348,7 @@ class SupabaseService:
                 return None
             
             # Check if any active reminder exists for this recurring series
-            existing_result = self.client.table("reminders").select("id").eq(
+            existing_result = self.admin_client.table("reminders").select("id").eq(
                 "user_id", str(completed_reminder.user_id)
             ).eq(
                 "title", completed_reminder.title
@@ -506,7 +513,7 @@ class SupabaseService:
             
             if not birthday.id:
                 birthday.id = uuid4()
-                birthday.created_at = datetime.now()
+                birthday.created_at = datetime.now(timezone.utc)
             
             # Convert to dict with proper serialization
             birthday_data = birthday.dict()
@@ -531,7 +538,7 @@ class SupabaseService:
     async def get_user_birthdays(self, user_id: UUID) -> List[Birthday]:
         """Get user birthdays."""
         try:
-            result = self.client.table("birthdays").select("*").eq("user_id", str(user_id)).order("birthdate", desc=False).execute()
+            result = self.admin_client.table("birthdays").select("*").eq("user_id", str(user_id)).order("birthdate", desc=False).execute()
             return [Birthday(**b) for b in result.data]
         except Exception as e:
             logger.error(f"Error getting user birthdays: {e}")
@@ -541,7 +548,7 @@ class SupabaseService:
         """Get upcoming birthdays within specified days."""
         try:
             # Try custom RPC function for date calculations across years
-            result = self.client.rpc(
+            result = self.admin_client.rpc(
                 'get_upcoming_birthdays',
                 {
                     'user_id': str(user_id),
@@ -565,7 +572,7 @@ class SupabaseService:
                 id=uuid4(),
                 user_id=user_id,
                 type=session_type,
-                start_time=datetime.now(),
+                start_time=datetime.now(timezone.utc),
                 status=SessionStatus.ACTIVE,
                 tags=tags or []
             )
@@ -601,7 +608,7 @@ class SupabaseService:
         try:
             result = self.admin_client.table("sessions").update({
                 "status": status.value,
-                "end_time": datetime.now().isoformat()
+                "end_time": datetime.now(timezone.utc).isoformat()
             }).eq("id", str(session_id)).execute()
             
             return len(result.data) > 0
@@ -638,7 +645,7 @@ class SupabaseService:
         """Get user tags with usage counts."""
         try:
             # Try custom RPC function to aggregate tags
-            result = self.client.rpc(
+            result = self.admin_client.rpc(
                 'get_user_tag_counts',
                 {'user_id': str(user_id)}
             ).execute()
@@ -694,7 +701,7 @@ class SupabaseService:
             if not file.id:
                 file.id = uuid4()
             if not file.created_at:
-                file.created_at = datetime.now()
+                file.created_at = datetime.now(timezone.utc)
             
             # Convert to dict with proper serialization
             file_data = file.dict()
@@ -720,7 +727,7 @@ class SupabaseService:
     async def get_user_files(self, user_id: UUID, file_type: Optional[str] = None) -> List[File]:
         """Get user files."""
         try:
-            query = self.client.table("files").select("*").eq("user_id", str(user_id)).eq("upload_status", "completed").is_("deleted_at", "null")
+            query = self.admin_client.table("files").select("*").eq("user_id", str(user_id)).eq("upload_status", "completed").is_("deleted_at", "null")
             
             if file_type:
                 query = query.eq("file_type", file_type)

@@ -2,7 +2,7 @@
 Brain dump workflow for managing focused note-taking sessions.
 """
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 from src.models.message_types import ProcessedMessage, ClassificationResult
 from src.models.database import User, Session, Message, MessageType, SourceType, SessionStatus
@@ -148,7 +148,7 @@ class BrainDumpWorkflow:
             return True
             
         timeout_delta = timedelta(minutes=self.session_timeout_minutes)
-        return datetime.now() - session.start_time > timeout_delta
+        return datetime.now(timezone.utc) - session.start_time > timeout_delta
     
     def _should_send_time_prompt(self, session: Session) -> bool:
         """Check if enough time has passed to send a continuation prompt."""
@@ -157,7 +157,7 @@ class BrainDumpWorkflow:
             
         # Send prompt after 2 minutes if no recent activity
         prompt_delta = timedelta(minutes=2)
-        return datetime.now() - session.start_time > prompt_delta
+        return datetime.now(timezone.utc) - session.start_time > prompt_delta
     
     async def end_session(self, user: User, session_id: str, reason: SessionStatus = SessionStatus.COMPLETED):
         """End a brain dump session."""

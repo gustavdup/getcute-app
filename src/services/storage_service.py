@@ -5,7 +5,7 @@ import logging
 import os
 import uuid
 from typing import Optional, Dict, Any, BinaryIO
-from datetime import datetime
+from datetime import datetime, timezone
 from supabase import Client
 
 from config.settings import settings
@@ -280,7 +280,7 @@ class StorageService:
             extension = extensions.get(file_type, "bin")
         
         # Generate timestamp-based filename
-        timestamp = int(datetime.now().timestamp())
+        timestamp = int(datetime.now(timezone.utc).timestamp())
         uuid_part = str(uuid.uuid4())[:8]
         
         return f"{timestamp}_{uuid_part}.{extension}"
