@@ -124,3 +124,8 @@ uploads/
 scratch/
 temp_scripts/
 debug_output/
+
+# Development and documentation folders
+help-files/
+tests/
+supabase-sql-files/

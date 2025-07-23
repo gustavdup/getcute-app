@@ -13,9 +13,9 @@ import io
 from PIL import Image
 import openai
 
-from ..services.file_storage_service import FileStorageService
-from ..services.supabase_service import SupabaseService
-from ..models.database import Message, MessageType, SourceType
+from src.services.file_storage_service import FileStorageService
+from src.services.supabase_service import SupabaseService
+from src.models.database import Message, MessageType, SourceType
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ class MediaProcessingService:
         self.audio_types = {'.mp3', '.wav', '.m4a', '.ogg', '.aac', '.opus'}
         self.document_types = {'.pdf', '.doc', '.docx', '.txt', '.rtf'}
     
-    async def download_whatsapp_media(self, media_id: str, access_token: str) -> Optional[bytes]:
+    async def download_whatsapp_media(self, media_id: str, access_token: str) -> Optional[Dict[str, Any]]:
         """Download media file from WhatsApp API.
         
         Args:
@@ -43,10 +43,10 @@ class MediaProcessingService:
             access_token: WhatsApp API access token
             
         Returns:
-            File content as bytes, or None if download failed
+            Dictionary with file content, mime_type, and metadata, or None if download failed
         """
         try:
-            # Step 1: Get media URL
+            # Step 1: Get media URL and metadata
             async with aiohttp.ClientSession() as session:
                 url = f"https://graph.facebook.com/v18.0/{media_id}"
                 headers = {"Authorization": f"Bearer {access_token}"}
@@ -55,6 +55,10 @@ class MediaProcessingService:
                     if response.status == 200:
                         media_info = await response.json()
                         media_url = media_info.get('url')
+                        mime_type = media_info.get('mime_type')
+                        file_size = media_info.get('file_size')
+                        
+                        logger.info(f"WhatsApp media info - MIME: {mime_type}, Size: {file_size}")
                         
                         if not media_url:
                             logger.error(f"No URL found in media info: {media_info}")
@@ -67,8 +71,14 @@ class MediaProcessingService:
                 async with session.get(media_url, headers=headers) as response:
                     if response.status == 200:
                         file_content = await response.read()
-                        logger.info(f"Downloaded media file: {len(file_content)} bytes")
-                        return file_content
+                        logger.info(f"Downloaded media file: {len(file_content)} bytes, MIME: {mime_type}")
+                        
+                        return {
+                            "content": file_content,
+                            "mime_type": mime_type,
+                            "file_size": file_size,
+                            "media_id": media_id
+                        }
                     else:
                         logger.error(f"Failed to download media file: {response.status}")
                         return None
@@ -77,17 +87,27 @@ class MediaProcessingService:
             logger.error(f"Error downloading WhatsApp media {media_id}: {e}")
             return None
     
-    def detect_file_type(self, filename: str, file_content: bytes) -> str:
-        """Detect file type based on filename and content.
+    def detect_file_type(self, filename: str, file_content: bytes, mime_type: Optional[str] = None) -> str:
+        """Detect file type based on filename, content, and mime type.
         
         Args:
             filename: Original filename
             file_content: File content as bytes
+            mime_type: MIME type from WhatsApp API
             
         Returns:
             File type category (image, audio, document, unknown)
         """
-        # Get file extension
+        # First check mime type (most reliable for WhatsApp media)
+        if mime_type:
+            if mime_type.startswith('audio/'):
+                return "audio"
+            elif mime_type.startswith('image/'):
+                return "image"
+            elif mime_type.startswith('application/') and any(doc_type in mime_type for doc_type in ['pdf', 'document', 'msword']):
+                return "document"
+        
+        # Fallback to extension
         file_ext = os.path.splitext(filename.lower())[1]
         
         # Check by extension
@@ -97,6 +117,26 @@ class MediaProcessingService:
             return "audio"
         elif file_ext in self.document_types:
             return "document"
+        
+        # Check by content (magic bytes) for unknown extensions
+        if file_content:
+            # OGG audio files start with "OggS"
+            if file_content.startswith(b'OggS'):
+                return "audio"
+            # M4A files (used by WhatsApp voice notes)
+            elif file_content[4:8] == b'ftyp' and b'M4A' in file_content[:20]:
+                return "audio"
+            # MP3 files
+            elif file_content.startswith(b'ID3') or file_content.startswith(b'\xff\xfb'):
+                return "audio"
+            # JPEG
+            elif file_content.startswith(b'\xff\xd8\xff'):
+                return "image"
+            # PNG
+            elif file_content.startswith(b'\x89PNG'):
+                return "image"
+        
+        return "unknown"
         
         # Check by content (magic bytes)
         if len(file_content) >= 4:
@@ -154,10 +194,15 @@ class MediaProcessingService:
                 logger.warning(f"Could not extract image metadata: {e}")
                 metadata = {}
             
+            # Generate AI description of the image using GPT-4V
+            ai_description = await self.analyze_image_content(file_content, filename)
+            
             # Create content for vector embedding
             content_for_embedding = f"Image: {filename}"
             if caption:
                 content_for_embedding += f" - {caption}"
+            if ai_description:
+                content_for_embedding += f" - AI Analysis: {ai_description}"
             
             # Generate vector embedding
             vector_embedding = await self.generate_vector_embedding(content_for_embedding)
@@ -167,6 +212,7 @@ class MediaProcessingService:
                 "file_info": file_info,
                 "metadata": metadata,
                 "content": caption or f"Image: {filename}",
+                "ai_description": ai_description,
                 "vector_embedding": vector_embedding,
                 "processed_at": datetime.now(timezone.utc).isoformat()
             }
@@ -177,6 +223,78 @@ class MediaProcessingService:
         except Exception as e:
             logger.error(f"Error processing image {filename}: {e}")
             raise
+    
+    async def analyze_image_content(self, file_content: bytes, filename: str) -> Optional[str]:
+        """Analyze image content using OpenAI GPT-4V for AI description.
+        
+        Args:
+            file_content: Image file content as bytes
+            filename: Original filename
+            
+        Returns:
+            AI-generated description of the image, or None if failed
+        """
+        try:
+            logger.info(f"Analyzing image content for: {filename}")
+            
+            # Import OpenAI client
+            from openai import OpenAI
+            import base64
+            import os
+            
+            # Initialize OpenAI client
+            client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+            
+            # Convert image to base64
+            base64_image = base64.b64encode(file_content).decode('utf-8')
+            
+            # Get the image format for the data URL
+            image_format = "jpeg"  # Default
+            if filename.lower().endswith('.png'):
+                image_format = "png"
+            elif filename.lower().endswith('.gif'):
+                image_format = "gif"
+            elif filename.lower().endswith('.webp'):
+                image_format = "webp"
+            
+            # Analyze image using GPT-4V
+            response = client.chat.completions.create(
+                model=os.getenv("OPENAI_MODEL_IMAGE_RECOGNITION", "gpt-4o"),
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Please analyze this image and provide a detailed description of what you see. Include objects, people, activities, colors, setting, and any text visible in the image. Keep it concise but informative."
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/{image_format};base64,{base64_image}"
+                                }
+                            }
+                        ]
+                    }
+                ],
+                max_tokens=300
+            )
+            
+            # Extract the description
+            description = None
+            if response.choices and response.choices[0].message.content:
+                description = response.choices[0].message.content.strip()
+            
+            if description:
+                logger.info(f"Successfully analyzed image: {len(description)} characters")
+                return description
+            else:
+                logger.warning(f"Empty description for image: {filename}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error analyzing image content {filename}: {e}")
+            return None
     
     async def process_audio(self, user_id: UUID, filename: str, file_content: bytes) -> Dict[str, Any]:
         """Process an audio file (voice note).
@@ -190,6 +308,8 @@ class MediaProcessingService:
             Dictionary with processing results
         """
         try:
+            logger.info(f"Processing audio file: {filename} ({len(file_content)} bytes)")
+            
             # Save file to storage
             file_info = await self.file_storage.save_file(
                 user_id=user_id,
@@ -197,9 +317,17 @@ class MediaProcessingService:
                 file_content=file_content,
                 file_type="audio"
             )
+            logger.info(f"Audio file saved to storage: {file_info.get('public_url', 'No URL')}")
             
             # Transcribe audio using OpenAI Whisper
+            logger.info("Starting audio transcription with OpenAI Whisper...")
             transcription = await self.transcribe_audio(file_content, filename)
+            
+            if transcription:
+                logger.info(f"Transcription successful: {len(transcription)} characters")
+                logger.debug(f"Transcription text: {transcription[:100]}...")
+            else:
+                logger.warning("Transcription failed or returned empty result")
             
             # Create content for vector embedding
             content_for_embedding = transcription or f"Voice note: {filename}"
@@ -279,21 +407,152 @@ class MediaProcessingService:
             Transcription text, or None if failed
         """
         try:
-            # For now, return a placeholder - would implement OpenAI Whisper API call
-            logger.info(f"Transcribing audio file: {filename}")
+            logger.info(f"Transcribing audio file: {filename} ({len(file_content)} bytes)")
             
-            # TODO: Implement actual OpenAI Whisper API call
-            # This would involve:
-            # 1. Creating a temporary file or using BytesIO
-            # 2. Calling openai.Audio.transcribe()
-            # 3. Returning the transcription text
+            # Import OpenAI client
+            from openai import OpenAI
+            import tempfile
+            import os
             
-            # Placeholder implementation
-            return f"[Transcription placeholder for {filename}]"
+            # Initialize OpenAI client
+            client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+            
+            # Create a temporary file for the audio
+            with tempfile.NamedTemporaryFile(delete=False, suffix=self._get_audio_extension(filename)) as temp_file:
+                temp_file.write(file_content)
+                temp_file_path = temp_file.name
+            
+            try:
+                # Transcribe using OpenAI Whisper
+                with open(temp_file_path, "rb") as audio_file:
+                    transcript = client.audio.transcriptions.create(
+                        model=os.getenv("OPENAI_MODEL_VTT", "whisper-1"),
+                        file=audio_file,
+                        response_format="text"
+                    )
+                
+                # Clean up transcription text
+                transcription_text = transcript.strip() if transcript else ""
+                
+                if transcription_text:
+                    logger.info(f"Successfully transcribed audio: {len(transcription_text)} characters")
+                    return transcription_text
+                else:
+                    logger.warning(f"Empty transcription for {filename}")
+                    return None
+                    
+            finally:
+                # Clean up temporary file
+                try:
+                    os.unlink(temp_file_path)
+                except Exception as cleanup_error:
+                    logger.warning(f"Could not delete temp file {temp_file_path}: {cleanup_error}")
             
         except Exception as e:
             logger.error(f"Error transcribing audio {filename}: {e}")
             return None
+    
+    def _generate_filename_with_extension(self, filename: str, mime_type: Optional[str]) -> str:
+        """Generate appropriate filename with extension based on MIME type.
+        
+        Args:
+            filename: Base filename without extension
+            mime_type: MIME type from WhatsApp API
+            
+        Returns:
+            Filename with appropriate extension
+        """
+        # If filename already has an extension, keep it
+        if '.' in filename and not filename.endswith('.'):
+            return filename
+        
+        # Add extension based on MIME type
+        if mime_type:
+            if mime_type.startswith('audio/'):
+                # Audio files
+                if 'ogg' in mime_type:
+                    return f"{filename}.ogg"
+                elif 'mpeg' in mime_type or 'mp3' in mime_type:
+                    return f"{filename}.mp3"
+                elif 'm4a' in mime_type or 'mp4' in mime_type:
+                    return f"{filename}.m4a"
+                elif 'wav' in mime_type:
+                    return f"{filename}.wav"
+                else:
+                    return f"{filename}.ogg"  # Default for WhatsApp voice notes
+                    
+            elif mime_type.startswith('image/'):
+                # Image files
+                if 'jpeg' in mime_type or 'jpg' in mime_type:
+                    return f"{filename}.jpg"
+                elif 'png' in mime_type:
+                    return f"{filename}.png"
+                elif 'gif' in mime_type:
+                    return f"{filename}.gif"
+                elif 'webp' in mime_type:
+                    return f"{filename}.webp"
+                else:
+                    return f"{filename}.jpg"  # Default for images
+                    
+            elif mime_type.startswith('application/'):
+                # Document files
+                if 'pdf' in mime_type:
+                    return f"{filename}.pdf"
+                elif 'msword' in mime_type or 'document' in mime_type:
+                    if 'wordprocessingml' in mime_type:
+                        return f"{filename}.docx"
+                    else:
+                        return f"{filename}.doc"
+                elif 'spreadsheet' in mime_type or 'excel' in mime_type:
+                    if 'spreadsheetml' in mime_type:
+                        return f"{filename}.xlsx"
+                    else:
+                        return f"{filename}.xls"
+                elif 'presentation' in mime_type or 'powerpoint' in mime_type:
+                    if 'presentationml' in mime_type:
+                        return f"{filename}.pptx"
+                    else:
+                        return f"{filename}.ppt"
+                elif 'zip' in mime_type:
+                    return f"{filename}.zip"
+                elif 'text' in mime_type:
+                    return f"{filename}.txt"
+                else:
+                    return f"{filename}.bin"  # Generic binary file
+                    
+            elif mime_type.startswith('text/'):
+                # Text files
+                if 'plain' in mime_type:
+                    return f"{filename}.txt"
+                elif 'csv' in mime_type:
+                    return f"{filename}.csv"
+                else:
+                    return f"{filename}.txt"
+                    
+            elif mime_type.startswith('video/'):
+                # Video files
+                if 'mp4' in mime_type:
+                    return f"{filename}.mp4"
+                elif 'mpeg' in mime_type:
+                    return f"{filename}.mpg"
+                elif 'avi' in mime_type:
+                    return f"{filename}.avi"
+                elif 'mov' in mime_type:
+                    return f"{filename}.mov"
+                else:
+                    return f"{filename}.mp4"  # Default for videos
+        
+        # If no MIME type or unrecognized, return original filename
+        return filename
+    
+    def _get_audio_extension(self, filename: str) -> str:
+        """Get appropriate audio file extension."""
+        # WhatsApp typically sends voice notes as .ogg or .m4a
+        if filename.lower().endswith(('.ogg', '.m4a', '.mp3', '.wav')):
+            return os.path.splitext(filename)[1]
+        else:
+            # Default to .ogg for WhatsApp voice notes
+            return '.ogg'
     
     async def extract_document_text(self, file_content: bytes, filename: str) -> Optional[str]:
         """Extract text from document file.
@@ -361,13 +620,22 @@ class MediaProcessingService:
             Message object with media processing results
         """
         try:
-            # Download the file
-            file_content = await self.download_whatsapp_media(media_id, access_token)
-            if not file_content:
+            # Download the file with metadata
+            download_result = await self.download_whatsapp_media(media_id, access_token)
+            if not download_result:
                 raise Exception("Failed to download media file")
             
-            # Detect file type
-            file_type = self.detect_file_type(filename, file_content)
+            file_content = download_result["content"]
+            mime_type = download_result.get("mime_type")
+            file_size = download_result.get("file_size")
+            
+            # Generate appropriate filename with extension based on mime type
+            filename = self._generate_filename_with_extension(filename, mime_type)
+            
+            logger.info(f"Processing media: {filename}, MIME: {mime_type}, Size: {file_size}")
+            
+            # Detect file type using enhanced detection
+            file_type = self.detect_file_type(filename, file_content, mime_type)
             
             # Process based on type (without saving to database yet)
             if file_type == "image":

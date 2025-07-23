@@ -161,7 +161,7 @@ class WhatsAppService:
             logger.error(f"Error sending WhatsApp interactive message: {e}")
             return False
     
-    async def download_media(self, media_id: str) -> Optional[bytes]:
+    async def download_media(self, media_id: str) -> Optional[Dict[str, Any]]:
         """Download media file from WhatsApp."""
         try:
             logger.info(f"Downloading WhatsApp media: {media_id}")
@@ -169,7 +169,7 @@ class WhatsAppService:
             
             headers = await self._get_headers()
             
-            # First, get the media URL
+            # First, get the media URL and metadata
             async with httpx.AsyncClient() as client:
                 response = await client.get(
                     f"https://graph.facebook.com/v18.0/{media_id}",
@@ -184,6 +184,10 @@ class WhatsAppService:
                 
                 media_data = response.json()
                 media_url = media_data.get("url")
+                mime_type = media_data.get("mime_type")
+                file_size = media_data.get("file_size")
+                
+                logger.info(f"Media info - URL: {bool(media_url)}, MIME: {mime_type}, Size: {file_size}")
                 
                 if not media_url:
                     logger.error("No URL found in media response")
@@ -204,7 +208,13 @@ class WhatsAppService:
                     logger.info(f"Successfully downloaded media {media_id}: {content_size} bytes")
                     msg_logger.log_media_processing("download", media_id, "unknown", "WHATSAPP_MEDIA_DOWNLOAD_SUCCESS", 
                                                   file_info={"size_bytes": content_size})
-                    return media_response.content
+                    
+                    return {
+                        "content": media_response.content,
+                        "mime_type": mime_type,
+                        "file_size": file_size,
+                        "media_id": media_id
+                    }
                 else:
                     logger.error(f"Failed to download media: {media_response.text}")
                     msg_logger.log_media_processing("download", media_id, "unknown", "WHATSAPP_MEDIA_DOWNLOAD_ERROR", 

@@ -117,6 +117,7 @@ class Reminder(BaseModel):
     trigger_time: datetime
     repeat_type: RepeatType = RepeatType.NONE
     repeat_interval: Optional[int] = None
+    repeat_until: Optional[datetime] = None  # End date for recurring reminders
     tags: Optional[List[str]] = []
     is_active: bool = True
     created_at: Optional[datetime] = None

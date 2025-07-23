@@ -25,7 +25,9 @@ class Settings(BaseSettings):
     
     # OpenAI Configuration
     openai_api_key: str = Field(default="", description="OpenAI API key")
-    openai_model: str = Field(default="gpt-4-turbo-preview", description="OpenAI model to use")
+    openai_model: str = Field(default="gpt-4o-mini", description="Default OpenAI model to use")
+    openai_model_vtt: str = Field(default="whisper-1", description="OpenAI model for voice transcription")
+    openai_model_image_recognition: str = Field(default="gpt-4o", description="OpenAI model for image recognition")
     
     # WhatsApp Business API
     whatsapp_access_token: str = Field(default="", description="WhatsApp access token")

@@ -539,8 +539,17 @@ class MessageRouter:
                 error_sent = True
                 return
             
-            # Process the media file
-            filename = f"{message.message_type}_{message.message_id}"
+            # Process the media file with appropriate filename
+            if message.message_type == "audio":
+                # For voice notes, use a more descriptive filename
+                filename = f"voice_note_{message.message_id}"
+            elif message.message_type == "image":
+                filename = f"image_{message.message_id}"
+            elif message.message_type == "document":
+                filename = f"document_{message.message_id}"
+            else:
+                filename = f"{message.message_type}_{message.message_id}"
+                
             processed_message = await self.media_processor.process_media_message(
                 user_id=user.id,
                 media_id=message.media_id,

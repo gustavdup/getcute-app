@@ -22,6 +22,7 @@ from config.database import db_manager
 from handlers.webhook_handler import webhook_router
 from handlers.slash_commands import commands_router
 from utils.logger import setup_application_logging
+from services.reminder_scheduler import get_reminder_scheduler
 
 # Configure comprehensive logging
 setup_application_logging()
@@ -88,6 +89,14 @@ async def startup_event():
     else:
         logger.error("Database connection failed")
     
+    # Start reminder scheduler
+    try:
+        scheduler = await get_reminder_scheduler()
+        await scheduler.start()
+        logger.info("✅ Reminder scheduler started - checking every minute for due reminders")
+    except Exception as e:
+        logger.error(f"❌ Failed to start reminder scheduler: {e}")
+    
     logger.info("Application startup complete")
 
 
@@ -95,6 +104,16 @@ async def startup_event():
 async def shutdown_event():
     """Clean up on application shutdown."""
     logger.info("Shutting down Cute WhatsApp Bot...")
+    
+    # Stop reminder scheduler
+    try:
+        scheduler = await get_reminder_scheduler()
+        await scheduler.stop()
+        logger.info("✅ Reminder scheduler stopped successfully")
+    except Exception as e:
+        logger.error(f"❌ Error stopping reminder scheduler: {e}")
+    
+    logger.info("👋 Application shutdown complete")
 
 
 @app.get("/")

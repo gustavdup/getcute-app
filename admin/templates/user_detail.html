@@ -458,6 +458,69 @@
             border-left: 4px solid #ff9800;
         }
         
+        .reminder-item.upcoming {
+            border-left: 4px solid #4caf50;
+            background: #f1f8e9;
+        }
+        
+        .reminder-item.past {
+            border-left: 4px solid #9e9e9e;
+            background: #fafafa;
+        }
+        
+        /* Reminders container with two columns */
+        .reminders-container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-top: 10px;
+        }
+        
+        .reminders-column {
+            min-height: 300px;
+        }
+        
+        .reminders-column h3 {
+            margin-bottom: 15px;
+            padding-bottom: 8px;
+            border-bottom: 2px solid #e0e0e0;
+            font-size: 16px;
+            color: #333;
+        }
+        
+        .reminders-column h4 {
+            font-size: 14px;
+            color: #666;
+            margin-bottom: 5px;
+        }
+        
+        /* Status indicators */
+        .status-active {
+            background: #4caf50;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 500;
+        }
+        
+        .status-completed {
+            background: #9e9e9e;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 500;
+        }
+        
+        /* Responsive design for smaller screens */
+        @media (max-width: 768px) {
+            .reminders-container {
+                grid-template-columns: 1fr;
+                gap: 15px;
+            }
+        }
+        
         .birthday-item {
             border-left: 4px solid #e91e63;
         }
@@ -512,8 +575,12 @@
                     <span class="stat-label">Notes</span>
                 </div>
                 <div class="stat-item">
-                    <span class="stat-number">{{ organized_data.reminders|length }}</span>
-                    <span class="stat-label">Reminders</span>
+                    <span class="stat-number">{{ organized_data.upcoming_reminders|length }}</span>
+                    <span class="stat-label">Upcoming</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-number">{{ organized_data.past_reminders|length }}</span>
+                    <span class="stat-label">Past Reminders</span>
                 </div>
                 <div class="stat-item">
                     <span class="stat-number">{{ organized_data.birthdays|length }}</span>
@@ -696,34 +763,71 @@
 
             <!-- Reminders Tab -->
             <div id="reminders" class="tab-content">
-                {% if organized_data.reminders %}
-                    {% for reminder in organized_data.reminders %}
-                    <div class="message-item reminder-item">
-                        <div class="message-meta">
-                            <span>⏰ {{ reminder.get('trigger_time', 'No time set') }}</span>
-                            <span>{{ 'Active' if reminder.get('is_active', False) else 'Completed' }}</span>
-                        </div>
-                        <div class="message-content">
-                            <strong>{{ reminder.get('title', 'No title') }}</strong>
-                            {% if reminder.get('description') %}
-                            <p>{{ reminder.get('description') }}</p>
-                            {% endif %}
-                        </div>
-                        {% if reminder.get('tags') %}
-                        <div class="message-tags">
-                            {% for tag in reminder.get('tags', []) %}
-                            <span class="tag">#{{ tag }}</span>
+                <div class="reminders-container">
+                    <div class="reminders-column">
+                        <h3>🔔 Upcoming Reminders</h3>
+                        {% if organized_data.upcoming_reminders %}
+                            {% for reminder in organized_data.upcoming_reminders %}
+                            <div class="message-item reminder-item upcoming">
+                                <div class="message-meta">
+                                    <span>⏰ {{ reminder.get('trigger_time', 'No time set') }}</span>
+                                    <span class="status-active">{{ 'Active' if reminder.get('is_active', False) else 'Pending' }}</span>
+                                </div>
+                                <div class="message-content">
+                                    <strong>{{ reminder.get('title', 'No title') }}</strong>
+                                    {% if reminder.get('description') %}
+                                    <p>{{ reminder.get('description') }}</p>
+                                    {% endif %}
+                                </div>
+                                {% if reminder.get('tags') %}
+                                <div class="message-tags">
+                                    {% for tag in reminder.get('tags', []) %}
+                                    <span class="tag">#{{ tag }}</span>
+                                    {% endfor %}
+                                </div>
+                                {% endif %}
+                            </div>
                             {% endfor %}
-                        </div>
+                        {% else %}
+                            <div class="empty-state">
+                                <h4>No upcoming reminders</h4>
+                                <p>All reminders are in the past.</p>
+                            </div>
                         {% endif %}
                     </div>
-                    {% endfor %}
-                {% else %}
-                    <div class="empty-state">
-                        <h3>No reminders found</h3>
-                        <p>This user hasn't set any reminders yet.</p>
+                    
+                    <div class="reminders-column">
+                        <h3>📋 Past Reminders</h3>
+                        {% if organized_data.past_reminders %}
+                            {% for reminder in organized_data.past_reminders %}
+                            <div class="message-item reminder-item past">
+                                <div class="message-meta">
+                                    <span>⏰ {{ reminder.get('trigger_time', 'No time set') }}</span>
+                                    <span class="status-completed">{{ 'Completed' if reminder.get('is_active', False) else 'Expired' }}</span>
+                                </div>
+                                <div class="message-content">
+                                    <strong>{{ reminder.get('title', 'No title') }}</strong>
+                                    {% if reminder.get('description') %}
+                                    <p>{{ reminder.get('description') }}</p>
+                                    {% endif %}
+                                </div>
+                                {% if reminder.get('tags') %}
+                                <div class="message-tags">
+                                    {% for tag in reminder.get('tags', []) %}
+                                    <span class="tag">#{{ tag }}</span>
+                                    {% endfor %}
+                                </div>
+                                {% endif %}
+                            </div>
+                            {% endfor %}
+                        {% else %}
+                            <div class="empty-state">
+                                <h4>No past reminders</h4>
+                                <p>This user hasn't had any triggered reminders yet.</p>
+                            </div>
+                        {% endif %}
                     </div>
-                {% endif %}
+                </div>
             </div>
 
             <!-- Birthdays Tab -->

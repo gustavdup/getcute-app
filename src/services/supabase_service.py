@@ -246,14 +246,256 @@ class SupabaseService:
     async def get_due_reminders(self, time_window_minutes: int = 5) -> List[Reminder]:
         """Get reminders that are due within the time window."""
         try:
-            end_time = datetime.now() + timedelta(minutes=time_window_minutes)
+            now = datetime.now()
+            # Look back 2 minutes to catch any missed reminders due to timing issues
+            start_time = now - timedelta(minutes=2)  
+            end_time = now + timedelta(minutes=time_window_minutes)
             
-            result = self.client.table("reminders").select("*").eq("is_active", True).gte("trigger_time", datetime.now().isoformat()).lte("trigger_time", end_time.isoformat()).execute()
+            # Get reminders that:
+            # 1. Are active
+            # 2. Have trigger_time between start_time and end_time
+            # 3. Don't have completed_at set (haven't been sent yet)
+            result = self.client.table("reminders").select("*").eq(
+                "is_active", True
+            ).gte(
+                "trigger_time", start_time.isoformat()
+            ).lte(
+                "trigger_time", end_time.isoformat()
+            ).is_(
+                "completed_at", "null"
+            ).execute()
             
             return [Reminder(**r) for r in result.data]
         except Exception as e:
             logger.error(f"Error getting due reminders: {e}")
             return []
+    
+    async def get_missed_recurring_reminders(self, hours_back: int = 768) -> List[Reminder]:  # 768 hours = 32 days
+        """
+        Find recurring reminders that should have triggered but didn't get their next occurrence created.
+        This is a failsafe for system downtime scenarios.
+        
+        Logic: For each completed recurring reminder, check if the NEXT occurrence in the chain exists.
+        If not, create ONE reminder for the next expected occurrence (not multiple missed ones).
+        """
+        try:
+            now = datetime.now()
+            cutoff_time = now - timedelta(hours=hours_back)
+            
+            # Find completed recurring reminders that:
+            # 1. Were completed (sent) in the past X hours (32 days for monthly reminders)
+            # 2. Are recurring (not NONE)
+            # 3. Should have had a next occurrence created
+            # 4. But no active reminder exists for the expected next trigger time
+            
+            result = self.client.table("reminders").select("*").eq(
+                "is_active", False  # Completed reminders
+            ).neq(
+                "repeat_type", "none"  # Recurring reminders only
+            ).gte(
+                "completed_at", cutoff_time.isoformat()  # Completed in the lookback window
+            ).not_.is_(
+                "completed_at", "null"  # Must have completed_at set
+            ).execute()
+            
+            completed_recurring = [Reminder(**r) for r in result.data]
+            recovery_reminders = []
+            
+            # For each completed recurring reminder, check if the recurring chain continues
+            for reminder in completed_recurring:
+                if not reminder.completed_at or not reminder.trigger_time:
+                    continue
+                
+                # Find the NEXT occurrence that should exist
+                next_expected_reminder = self._find_next_expected_occurrence(reminder, now)
+                
+                if next_expected_reminder:
+                    recovery_reminders.append(next_expected_reminder)
+            
+            if recovery_reminders:
+                logger.info(f"Found {len(recovery_reminders)} broken recurring chains - creating recovery reminders")
+            
+            return recovery_reminders
+            
+        except Exception as e:
+            logger.error(f"Error finding missed recurring reminders: {e}")
+            return []
+    
+    def _find_next_expected_occurrence(self, completed_reminder: Reminder, current_time: datetime) -> Optional[Reminder]:
+        """
+        Find the next occurrence that should exist in the recurring chain.
+        Only creates ONE reminder to continue the chain, not multiple missed ones.
+        """
+        try:
+            # Calculate the next occurrence that should have been created
+            next_trigger = self._calculate_next_trigger_time(
+                completed_reminder.trigger_time, 
+                completed_reminder.repeat_type
+            )
+            
+            if not next_trigger:
+                return None
+            
+            # Skip if next occurrence would be after repeat_until
+            if completed_reminder.repeat_until and next_trigger > completed_reminder.repeat_until:
+                return None
+            
+            # Check if any active reminder exists for this recurring series
+            existing_result = self.client.table("reminders").select("id").eq(
+                "user_id", str(completed_reminder.user_id)
+            ).eq(
+                "title", completed_reminder.title
+            ).eq(
+                "is_active", True
+            ).eq(
+                "repeat_type", completed_reminder.repeat_type
+            ).execute()
+            
+            # If an active reminder exists for this series, the chain is intact
+            if existing_result.data:
+                return None
+            
+            # No active reminder exists - the chain is broken
+            # Create the NEXT occurrence to continue the chain
+            
+            # If the expected time has passed, calculate the next appropriate time
+            if next_trigger <= current_time:
+                next_trigger = self._calculate_next_appropriate_time(
+                    completed_reminder.trigger_time,
+                    completed_reminder.repeat_type,
+                    current_time
+                )
+            
+            if not next_trigger:
+                return None
+            
+            # Create recovery reminder for the next occurrence
+            recovery_reminder = Reminder(
+                id=uuid4(),
+                user_id=completed_reminder.user_id,
+                title=completed_reminder.title,  # Keep original title (no [Missed] prefix)
+                description=completed_reminder.description,
+                trigger_time=next_trigger,
+                repeat_type=completed_reminder.repeat_type,
+                repeat_interval=completed_reminder.repeat_interval,
+                repeat_until=completed_reminder.repeat_until,
+                tags=completed_reminder.tags or [],
+                is_active=True,
+                created_at=current_time
+            )
+            
+            logger.info(f"Creating recovery reminder for broken chain: {completed_reminder.title} -> {next_trigger}")
+            return recovery_reminder
+            
+        except Exception as e:
+            logger.error(f"Error finding next expected occurrence: {e}")
+            return None
+    
+    def _calculate_next_appropriate_time(
+        self, 
+        original_trigger: datetime, 
+        repeat_type: str, 
+        current_time: datetime
+    ) -> Optional[datetime]:
+        """
+        Calculate the next appropriate time to continue the recurring chain.
+        This accounts for multiple missed occurrences and finds the next future time.
+        """
+        try:
+            if repeat_type == "daily":
+                # For daily reminders, find the next occurrence at the same time
+                next_time = original_trigger.replace(
+                    year=current_time.year,
+                    month=current_time.month,
+                    day=current_time.day
+                )
+                
+                # If today's time has passed, schedule for tomorrow
+                if next_time <= current_time:
+                    next_time = next_time + timedelta(days=1)
+                    
+                return next_time
+                
+            elif repeat_type == "weekly":
+                # For weekly reminders, find the next occurrence on the same day of week
+                days_ahead = (original_trigger.weekday() - current_time.weekday()) % 7
+                if days_ahead == 0:  # Same day of week
+                    # Check if time has passed today
+                    today_at_time = current_time.replace(
+                        hour=original_trigger.hour,
+                        minute=original_trigger.minute,
+                        second=original_trigger.second,
+                        microsecond=0
+                    )
+                    if today_at_time <= current_time:
+                        days_ahead = 7  # Next week
+                    else:
+                        days_ahead = 0  # Later today
+                
+                next_time = current_time + timedelta(days=days_ahead)
+                next_time = next_time.replace(
+                    hour=original_trigger.hour,
+                    minute=original_trigger.minute,
+                    second=original_trigger.second,
+                    microsecond=0
+                )
+                return next_time
+                
+            elif repeat_type == "monthly":
+                # For monthly reminders, schedule for next month on same day
+                next_month = current_time.month + 1
+                next_year = current_time.year
+                if next_month > 12:
+                    next_month = 1
+                    next_year += 1
+                
+                try:
+                    next_time = current_time.replace(
+                        year=next_year,
+                        month=next_month,
+                        day=min(original_trigger.day, 28),  # Safe day to avoid month overflow
+                        hour=original_trigger.hour,
+                        minute=original_trigger.minute,
+                        second=original_trigger.second
+                    )
+                    return next_time
+                except ValueError:
+                    # Fallback: add 30 days
+                    return current_time + timedelta(days=30)
+                    
+            elif repeat_type == "yearly":
+                # For yearly reminders, schedule for next year
+                try:
+                    next_time = original_trigger.replace(year=current_time.year + 1)
+                    if next_time <= current_time:
+                        next_time = next_time.replace(year=current_time.year + 2)
+                    return next_time
+                except ValueError:
+                    # Fallback: add 365 days
+                    return current_time + timedelta(days=365)
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error calculating next appropriate time: {e}")
+            return None
+    
+    def _calculate_next_trigger_time(self, original_trigger: datetime, repeat_type: str) -> Optional[datetime]:
+        """Calculate the next trigger time based on repeat type."""
+        try:
+            if repeat_type == "daily":
+                return original_trigger + timedelta(days=1)
+            elif repeat_type == "weekly":
+                return original_trigger + timedelta(weeks=1)
+            elif repeat_type == "monthly":
+                return original_trigger + timedelta(days=30)  # Approximate
+            elif repeat_type == "yearly":
+                return original_trigger + timedelta(days=365)  # Approximate
+            else:
+                return None
+        except Exception as e:
+            logger.error(f"Error calculating next trigger time: {e}")
+            return None
     
     # Birthday Operations
     async def save_birthday(self, birthday: Birthday) -> Birthday:

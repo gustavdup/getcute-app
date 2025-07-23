@@ -33,7 +33,7 @@ class BirthdayHandler(BaseHandler):
             self.msg_logger.log_message_stage("BIRTHDAY_PROCESSING", message_data)
             
             # Use AI to extract birthday information
-            birthday_info = await self._extract_birthday_with_ai(message.content)
+            birthday_info = await self._extract_birthday_with_ai(message.content, message, user)
             
             if birthday_info:
                 self.msg_logger.log_message_stage("BIRTHDAY_PARSED", message_data, 
@@ -107,8 +107,20 @@ class BirthdayHandler(BaseHandler):
                 "error": str(e)
             }
     
-    async def _extract_birthday_with_ai(self, content: str) -> Optional[Dict[str, Any]]:
+    async def _extract_birthday_with_ai(self, content: str, message: ProcessedMessage, user=None) -> Optional[Dict[str, Any]]:
         """Use OpenAI to extract birthday information from any format."""
+        
+        def create_log_message_data():
+            """Helper to create enhanced message_data for logging."""
+            return {
+                "message_id": message.message_id,
+                "user_phone": message.user_phone,
+                "user_id": getattr(user, 'id', None) if user else None,
+                "timestamp": message.timestamp.isoformat() if hasattr(message, 'timestamp') and message.timestamp else None,
+                "content": content,
+                "message_type": message.message_type
+            }
+        
         try:
             system_prompt = """You are an expert at extracting birthday information from text messages. 
 Extract the person's name/relationship and birthday from the user's message.
@@ -152,15 +164,72 @@ Clean up names (remove possessive 's, handle "my wife/husband/etc").
             
             if not response:
                 self.msg_logger.logger.warning("No response from AI for birthday extraction")
+                
+                # Log extraction failure for analysis
+                message_data = create_log_message_data()
+                
+                self.msg_logger.log_ai_extraction_failure(
+                    extraction_type="birthday",
+                    user_message=content,
+                    ai_response="Empty response from OpenAI API",
+                    message_data=message_data,
+                    failure_reason="AI returned empty response",
+                    extra_info={"classification_context": "birthday_extraction"}
+                )
+                
                 return None
+            
+            # Clean up the response text - sometimes OpenAI adds markdown formatting
+            response_text = response.strip()
+            
+            # Handle markdown code blocks
+            if response_text.startswith('```json'):
+                response_text = response_text[7:]  # Remove ```json
+                if response_text.endswith('```'):
+                    response_text = response_text[:-3]  # Remove closing ```
+                response_text = response_text.strip()
+            elif response_text.startswith('```'):
+                response_text = response_text[3:]  # Remove opening ```
+                if response_text.endswith('```'):
+                    response_text = response_text[:-3]  # Remove closing ```
+                response_text = response_text.strip()
+            
+            # Try to find JSON in the response if it has extra text
+            if not response_text.startswith('{'):
+                import re
+                json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+                if json_match:
+                    response_text = json_match.group()
             
             # Parse the JSON response
             try:
-                result = json.loads(response.strip())
+                result = json.loads(response_text)
                 
                 # Validate required fields
                 if not result.get("person_name") or not result.get("birthdate"):
                     self.msg_logger.logger.warning(f"AI extraction missing required fields: {result}")
+                    
+                    # Log extraction failure for analysis
+                    message_data = create_log_message_data()
+                    
+                    missing_fields = []
+                    if not result.get("person_name"):
+                        missing_fields.append("person_name")
+                    if not result.get("birthdate"):
+                        missing_fields.append("birthdate")
+                    
+                    self.msg_logger.log_ai_extraction_failure(
+                        extraction_type="birthday",
+                        user_message=content,
+                        ai_response=json.dumps(result, indent=2),
+                        message_data=message_data,
+                        failure_reason=f"Missing required fields: {', '.join(missing_fields)}",
+                        extra_info={
+                            "missing_fields": missing_fields,
+                            "ai_result": result
+                        }
+                    )
+                    
                     return None
                 
                 # Parse the date
@@ -168,6 +237,23 @@ Clean up names (remove possessive 's, handle "my wife/husband/etc").
                     birthdate = datetime.fromisoformat(result["birthdate"])
                 except (ValueError, TypeError) as e:
                     self.msg_logger.logger.warning(f"Could not parse birthdate '{result['birthdate']}': {e}")
+                    
+                    # Log extraction failure for analysis
+                    message_data = create_log_message_data()
+                    
+                    self.msg_logger.log_ai_extraction_failure(
+                        extraction_type="birthday",
+                        user_message=content,
+                        ai_response=json.dumps(result, indent=2),
+                        message_data=message_data,
+                        failure_reason=f"Invalid birthdate format: {result['birthdate']} - {str(e)}",
+                        extra_info={
+                            "birthdate_value": result['birthdate'],
+                            "parse_error": str(e),
+                            "ai_result": result
+                        }
+                    )
+                    
                     return None
                 
                 return {
@@ -177,9 +263,42 @@ Clean up names (remove possessive 's, handle "my wife/husband/etc").
                 }
                 
             except json.JSONDecodeError as e:
-                self.msg_logger.logger.warning(f"Could not parse AI response as JSON: {response}")
+                self.msg_logger.logger.warning(f"Could not parse AI response as JSON: {response_text[:200]}...")
+                self.msg_logger.logger.warning(f"Full JSON decode error: {e}")
+                
+                # Log extraction failure for analysis
+                message_data = create_log_message_data()
+                
+                self.msg_logger.log_ai_extraction_failure(
+                    extraction_type="birthday",
+                    user_message=content,
+                    ai_response=response_text,
+                    message_data=message_data,
+                    failure_reason=f"JSON decode error: {str(e)}",
+                    extra_info={
+                        "response_preview": response_text[:500],
+                        "json_error": str(e)
+                    }
+                )
+                
                 return None
                 
         except Exception as e:
             self.msg_logger.logger.error(f"Error in AI birthday extraction: {e}")
+            
+            # Log extraction failure for analysis
+            message_data = create_log_message_data()
+            
+            self.msg_logger.log_ai_extraction_failure(
+                extraction_type="birthday",
+                user_message=content,
+                ai_response=f"Exception occurred: {str(e)}",
+                message_data=message_data,
+                failure_reason=f"Unexpected error: {type(e).__name__}: {str(e)}",
+                extra_info={
+                    "exception_type": type(e).__name__,
+                    "exception_message": str(e)
+                }
+            )
+            
             return None

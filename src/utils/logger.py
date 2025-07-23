@@ -237,6 +237,110 @@ class MessageProcessingLogger:
         else:
             self.logger.error(f"MEDIA_ERROR: {json.dumps(log_entry, indent=2)}")
 
+    def log_ai_extraction_failure(self, extraction_type: str, user_message: str, ai_response: str, message_data: Dict[str, Any], failure_reason: str, extra_info: Optional[Dict[str, Any]] = None):
+        """Log AI extraction failures for birthday and reminder requests.
+        
+        This helps track and improve AI prompts over time by capturing:
+        - The user's original message
+        - The AI's response (if any)
+        - The reason for failure
+        - Context about the message
+        
+        Args:
+            extraction_type: "reminder" or "birthday"
+            user_message: The original user message
+            ai_response: The AI's response (JSON string, error message, etc.)
+            message_data: Standard message data dict
+            failure_reason: Why the extraction failed
+            extra_info: Additional context
+        """
+        log_entry = {
+            "timestamp": datetime.now().isoformat(),
+            "stage": "AI_EXTRACTION_FAILURE",
+            "extraction_type": extraction_type,
+            "message_id": message_data.get("message_id", "unknown"),
+            "user_phone": message_data.get("user_phone", "unknown"),
+            "user_id": message_data.get("user_id"),  # Will be populated if available
+            "message_timestamp": message_data.get("timestamp"),  # Original message timestamp
+            "user_message": user_message,
+            "ai_response": ai_response,
+            "failure_reason": failure_reason,
+            "message_type": message_data.get("message_type", "unknown"),
+            "extra_info": extra_info or {}
+        }
+        
+        # Log to both the main log and create specific extraction failures logs
+        self.logger.error(f"AI_EXTRACTION_FAILURE_{extraction_type.upper()}: {json.dumps(log_entry, indent=2)}")
+        
+        # Also write to dedicated extraction failures files
+        self._log_to_extraction_failures_file(log_entry)
+
+    def _log_to_extraction_failures_file(self, log_entry: Dict[str, Any]):
+        """Write extraction failure logs to a dedicated file for analysis."""
+        try:
+            os.makedirs("logs", exist_ok=True)
+            
+            extraction_type = log_entry.get("extraction_type", "unknown")
+            
+            # Create type-specific logger
+            logger_name = f"{extraction_type}_extraction_failures"
+            specific_logger = logging.getLogger(logger_name)
+            specific_logger.setLevel(logging.ERROR)
+            
+            # Clear existing handlers to avoid duplicates
+            if not specific_logger.handlers:
+                # Create specific log file for this extraction type
+                log_filename = f"logs/{extraction_type}_process_failures.log"
+                failure_handler = logging.handlers.RotatingFileHandler(
+                    log_filename,
+                    maxBytes=10*1024*1024,  # 10MB
+                    backupCount=5
+                )
+                failure_handler.setLevel(logging.ERROR)
+                
+                # Use a simple formatter for the specific logs - just the essential data
+                failure_formatter = logging.Formatter('%(message)s')
+                failure_handler.setFormatter(failure_formatter)
+                
+                specific_logger.addHandler(failure_handler)
+                specific_logger.propagate = False
+            
+            # Create a simplified log entry with only the requested fields
+            simplified_entry = {
+                "timestamp": log_entry.get("timestamp"),
+                "user_id": log_entry.get("user_id") or log_entry.get("user_phone"),  # Prefer user_id, fallback to phone
+                "message_id": log_entry.get("message_id"),
+                "message_sent_time": log_entry.get("message_timestamp") or log_entry.get("timestamp"),  # Use original message timestamp if available
+                "user_message": log_entry.get("user_message"),
+                "ai_response": log_entry.get("ai_response")
+            }
+            
+            # Log the simplified entry as JSON for easy parsing
+            specific_logger.error(json.dumps(simplified_entry, indent=2))
+            
+            # Also write to the general extraction failures log (existing functionality)
+            general_logger = logging.getLogger("extraction_failures")
+            general_logger.setLevel(logging.ERROR)
+            
+            if not general_logger.handlers:
+                general_handler = logging.handlers.RotatingFileHandler(
+                    "logs/ai_extraction_failures.log",
+                    maxBytes=10*1024*1024,  # 10MB
+                    backupCount=5
+                )
+                general_handler.setLevel(logging.ERROR)
+                general_formatter = logging.Formatter('%(message)s')
+                general_handler.setFormatter(general_formatter)
+                general_logger.addHandler(general_handler)
+                general_logger.propagate = False
+            
+            # Log the full entry to the general log
+            general_logger.error(json.dumps(log_entry, indent=2))
+            
+        except Exception as e:
+            # Don't let logging errors break the main flow
+            self.logger.warning(f"Failed to write to extraction failures log: {e}")
+
 
 def setup_application_logging():
     """Set up comprehensive logging for the entire application."""

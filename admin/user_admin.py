@@ -6,7 +6,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Request, HTTPException, Query
 from fastapi.templating import Jinja2Templates
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse, JSONResponse
 
 import sys
 import os
@@ -310,6 +310,45 @@ async def get_user_conversation(user_id: str, days: int = Query(30, description=
 
 def organize_user_data(messages: List[Dict], reminders: List[Dict], birthdays: List[Dict], sessions: List[Dict]) -> Dict[str, Any]:
     """Organize user data by categories for display."""
+    
+    # Separate reminders into upcoming and past
+    now = datetime.now()
+    upcoming_reminders = []
+    past_reminders = []
+    
+    for reminder in reminders:
+        trigger_time_str = reminder.get('trigger_time')
+        if trigger_time_str:
+            try:
+                # Parse the trigger time
+                if trigger_time_str.endswith('Z'):
+                    trigger_time = datetime.fromisoformat(trigger_time_str.replace('Z', '+00:00'))
+                elif '+' in trigger_time_str or trigger_time_str.endswith('-'):
+                    trigger_time = datetime.fromisoformat(trigger_time_str)
+                else:
+                    trigger_time = datetime.fromisoformat(trigger_time_str)
+                
+                # Remove timezone info for comparison (assume local time)
+                if trigger_time.tzinfo:
+                    trigger_time = trigger_time.replace(tzinfo=None)
+                
+                if trigger_time > now:
+                    upcoming_reminders.append(reminder)
+                else:
+                    past_reminders.append(reminder)
+            except (ValueError, TypeError):
+                # If we can't parse the time, put it in past reminders
+                past_reminders.append(reminder)
+        else:
+            # No trigger time, put in past reminders
+            past_reminders.append(reminder)
+    
+    # Sort upcoming by trigger_time ASC (earliest first)
+    upcoming_reminders.sort(key=lambda r: r.get('trigger_time', ''), reverse=False)
+    
+    # Sort past by trigger_time DESC (most recent first)  
+    past_reminders.sort(key=lambda r: r.get('trigger_time', ''), reverse=True)
+    
     organized = {
         "notes": [],
         "brain_dumps": [],
@@ -318,7 +357,9 @@ def organize_user_data(messages: List[Dict], reminders: List[Dict], birthdays: L
         "voice_notes": [],
         "images": [],
         "documents": [],
-        "reminders": reminders,
+        "reminders": reminders,  # Keep all reminders for backward compatibility
+        "upcoming_reminders": upcoming_reminders,
+        "past_reminders": past_reminders,
         "birthdays": birthdays,
         "sessions": sessions,
         "tags": set()
@@ -423,3 +464,27 @@ def calculate_user_stats(messages: List[Dict], reminders: List[Dict], birthdays:
     }
     
     return stats
+
+
+@user_admin_router.get("/reminder-scheduler/status")
+async def get_reminder_scheduler_status():
+    """Get reminder scheduler status."""
+    try:
+        from services.reminder_scheduler import get_reminder_scheduler
+        
+        scheduler = await get_reminder_scheduler()
+        status = scheduler.get_status()
+        
+        return JSONResponse({
+            "success": True,
+            "status": status,
+            "message": "Reminder scheduler is running" if status["is_running"] else "Reminder scheduler is stopped"
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting reminder scheduler status: {e}")
+        return JSONResponse({
+            "success": False,
+            "error": str(e),
+            "message": "Failed to get scheduler status"
+        })
